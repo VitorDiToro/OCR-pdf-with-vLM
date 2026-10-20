@@ -1,0 +1,102 @@
+"""Interface de linha de comando.
+
+  ocrpdf convert entrada.pdf [-o saida.pdf]   # OCR + montagem + renderização
+  ocrpdf analyze entrada.pdf [-w pasta]       # só OCR + montagem (gera document.json)
+  ocrpdf render  pasta/document.json -o x.pdf # re-renderiza após editar o JSON
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import sys
+from pathlib import Path
+
+from .model import Document
+from .ocr.vlm import PRESETS, VlmEngine
+from .pipeline import Pipeline
+from .render import render_pdf
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parser().parse_args(argv)
+    logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING, format="%(levelname)s %(message)s")
+    return args.func(args)
+
+
+def _parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="ocrpdf", description="PDF escaneado → PDF com texto real.")
+    p.add_argument("-v", "--verbose", action="store_true")
+    sub = p.add_subparsers(required=True)
+
+    ocr = argparse.ArgumentParser(add_help=False)
+    ocr.add_argument("input", type=Path, help="PDF escaneado")
+    ocr.add_argument("-w", "--work-dir", type=Path, help="pasta de trabalho (padrão: <saída>_work)")
+    ocr.add_argument("--server", default="http://localhost:8000/v1", help="URL da API OpenAI-compatível")
+    ocr.add_argument("--model", default="model", help="nome do modelo servido (--served-model-name)")
+    ocr.add_argument("--preset", choices=sorted(PRESETS), default="dots", help="prompt/coords do modelo")
+    ocr.add_argument("--dpi", type=int, default=200, help="resolução da rasterização")
+    ocr.add_argument("--pages", help='páginas, ex.: "1-3,7" (padrão: todas)')
+    ocr.add_argument("--workers", type=int, default=4, help="páginas processadas em paralelo")
+    ocr.add_argument("--font", default="auto", help='auto | serif | sans | mono | nome de uma família instalada')
+    ocr.add_argument("--lang", default="pt-BR", help="idioma do documento (metadado do PDF)")
+    ocr.add_argument("--force", action="store_true", help="refaz o OCR mesmo com cache")
+
+    conv = sub.add_parser("convert", parents=[ocr], help="OCR + renderização")
+    conv.add_argument("-o", "--output", type=Path, help="PDF de saída (padrão: <entrada>_ocr.pdf)")
+    conv.add_argument("--no-header", action="store_true", help="omite o cabeçalho corrente")
+    conv.set_defaults(func=_convert)
+
+    ana = sub.add_parser("analyze", parents=[ocr], help="só OCR e montagem do document.json")
+    ana.set_defaults(func=_analyze)
+
+    ren = sub.add_parser("render", help="renderiza um document.json")
+    ren.add_argument("document", type=Path)
+    ren.add_argument("-o", "--output", type=Path, required=True)
+    ren.add_argument("--no-header", action="store_true")
+    ren.set_defaults(func=_render)
+    return p
+
+
+def _work_dir(args, output: Path | None) -> Path:
+    if args.work_dir:
+        return args.work_dir
+    base = output or args.input
+    return base.with_name(base.stem + "_work")
+
+
+def _run_analysis(args, work: Path) -> Document:
+    engine = VlmEngine(base_url=args.server, model=args.model, preset=args.preset)
+    pipeline = Pipeline(engine, work, dpi=args.dpi, workers=args.workers)
+    return pipeline.analyze(args.input, pages=args.pages, font=args.font, lang=args.lang, force=args.force)
+
+
+def _convert(args) -> int:
+    output = args.output or args.input.with_name(args.input.stem + "_ocr.pdf")
+    work = _work_dir(args, output)
+    doc = _run_analysis(args, work)
+    if args.no_header:
+        doc.running_header = ""
+    render_pdf(doc, output, base_dir=work, html_out=work / "document.html")
+    print(f"{output}  (intermediário: {work / 'document.json'})")
+    return 0
+
+
+def _analyze(args) -> int:
+    work = _work_dir(args, None)
+    _run_analysis(args, work)
+    print(work / "document.json")
+    return 0
+
+
+def _render(args) -> int:
+    doc = Document.load(args.document)
+    if args.no_header:
+        doc.running_header = ""
+    render_pdf(doc, args.output, base_dir=args.document.parent, html_out=args.document.with_suffix(".html"))
+    print(args.output)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

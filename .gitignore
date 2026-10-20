@@ -1,0 +1,19 @@
+# Python / uv
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Pastas de trabalho do ocrpdf (cache por página, assets, document.json/html)
+*_work/
+work/
+
+# PDFs de entrada/saída (podem ter direitos autorais); fixtures de teste ficam liberadas
+*.pdf
+!tests/**/*.pdf
+
+# Claude Code (configuração local)
+.claude/settings.local.json

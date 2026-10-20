@@ -1,0 +1,77 @@
+/* Estilo base; tamanhos e espaçamentos medidos no original chegam via variáveis em :root. */
+
+@page {
+  @top-left, @top-center, @top-right { font-size: calc(var(--body-size) * 0.85); vertical-align: middle; }
+  @bottom-center { font-size: calc(var(--body-size) * 0.85); }
+  @footnote {
+    /* filete curto acima das notas, como na maioria dos livros */
+    background: linear-gradient(currentColor, currentColor) no-repeat top left / 33% 0.5pt;
+    padding-top: 4pt;
+    margin-top: 8pt;
+  }
+}
+
+body {
+  font-size: var(--body-size);
+  line-height: var(--line-height);
+  hyphens: manual;
+  orphans: 2;
+  widows: 2;
+}
+
+p { margin: 0 0 var(--par-gap); text-align: justify; }
+p.li { padding-left: 1.5em; text-indent: -1.5em; text-align: left; }
+p.caption { font-size: 0.9em; margin-top: 0.3em; }
+
+h1, h2, h3, h4, h5, h6 {
+  font-weight: bold;
+  line-height: 1.2;
+  margin: 1.1em 0 0.45em;
+  break-after: avoid;
+}
+h1 { font-size: 1.6em; margin-top: 0; }
+h2 { font-size: 1.25em; }
+h3 { font-size: 1.1em; }
+h4, h5, h6 { font-size: 1em; }
+
+sup, sub { font-size: 0.65em; line-height: 0; }
+sup { vertical-align: super; }
+sub { vertical-align: sub; }
+
+a { color: inherit; text-decoration: none; }
+a.noteref { color: #1a4c9a; }
+a.note-label { color: #1a4c9a; }
+
+.footnote {
+  float: footnote;
+  footnote-display: block;
+  font-size: var(--note-size);
+  line-height: 1.2;
+  text-align: justify;
+  text-indent: 0;
+  font-style: normal;
+  font-weight: normal;
+}
+.footnote::footnote-call { content: none; }
+.footnote::footnote-marker { content: none; }
+.footnote .note-par { display: block; margin-bottom: 2pt; }
+
+.endnote { margin: 0 0 var(--par-gap); text-align: justify; }
+.endnote p { margin: 0 0 0.3em; }
+
+.fn-anchor { height: 0; }
+
+.cols { column-gap: 1.5em; }
+.cols > * { break-inside: auto; }
+
+figure { margin: 0.8em 0; text-align: center; break-inside: avoid; }
+figure img { max-width: 100%; }
+
+.formula { text-align: center; margin: 0.6em 0; break-inside: avoid; }
+.math-display { max-width: 100%; }
+code.math-src { font-family: "Liberation Mono", monospace; font-size: 0.9em; }
+
+.table { margin: 0.8em 0; break-inside: auto; }
+.table table { border-collapse: collapse; margin: 0 auto; font-size: 0.92em; line-height: 1.25; }
+.table th, .table td { border: 0.5pt solid #444; padding: 2pt 4pt; vertical-align: top; text-align: left; }
+.table th { font-weight: bold; }

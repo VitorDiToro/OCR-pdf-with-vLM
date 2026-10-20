@@ -1,0 +1,32 @@
+[project]
+name = "ocrpdf"
+version = "0.1.0"
+description = "Converte PDFs escaneados em PDFs com texto real, reconstruindo a formatação e ligando notas às suas chamadas."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pypdfium2>=4.30",       # rasterização das páginas do PDF de entrada
+    "pillow>=10.0",
+    "numpy>=1.26",           # heurísticas de layout (recuo, alinhamento, tamanho de fonte)
+    "httpx>=0.27",           # cliente da API OpenAI-compatível (vLLM / Ollama)
+    "markdown-it-py>=3.0",   # parse do Markdown inline devolvido pelo modelo
+    "mdit-py-plugins>=0.4",  # $...$ (math inline)
+    "weasyprint>=62.0",      # HTML/CSS -> PDF (notas de rodapé, links internos)
+    "ziamath>=0.11",         # LaTeX -> SVG para fórmulas
+]
+
+[project.scripts]
+ocrpdf = "ocrpdf.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8.0", "pypdf>=4.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ocrpdf"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
