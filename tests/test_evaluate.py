@@ -80,6 +80,38 @@ def test_reference_projection_from_pdf(tmp_path):
     assert project(ref, toks) == {1: [False, False, True, False, True, False]}
 
 
+def test_project_survives_reordered_blocks():
+    body = "o corpo do texto segue aqui sem itálico algum".split()
+    note = "ver Kritik der reinen Vernunft na edição".split()
+    ref = [(w, w in ("Kritik", "der", "reinen", "Vernunft")) for w in note] + [(w, False) for w in body]
+    toks = {1: body + note}
+    got = project(ref, toks)[1]
+    assert got == [False] * len(body) + [False, True, True, True, True, False, False]
+
+
+def test_project_ignores_short_reordered_runs():
+    ref = [("alfa", False), ("beta", True), ("gama", False), ("delta", False), ("epsilon", False),
+           ("zeta", False), ("eta", False)]
+    # "beta" e "gama" aparecem fora de ordem, em trechos de 2 tokens: não casam
+    toks = {1: ["delta", "epsilon", "zeta", "eta", "alfa", "x", "beta", "y"]}
+    assert project(ref, toks)[1] == [False] * 8
+
+
+def test_project_is_fast_on_book_sized_input():
+    import random
+    import time
+    rnd = random.Random(1)
+    vocab = [f"w{k}" for k in range(3000)]
+    text = [rnd.choice(vocab) for _ in range(8000)]
+    blocks = [text[i:i + 500] for i in range(0, 8000, 500)]
+    scanned = [w for blk in blocks for w in blk]
+    rnd.shuffle(blocks)
+    ref = [(w, rnd.random() < 0.1) for blk in blocks for w in blk]
+    t = time.time()
+    out = project(ref, {1: scanned})
+    assert time.time() - t < 20 and sum(out[1]) > 600
+
+
 def test_parse_pages():
     assert parse_pages("ímpares", 5) == [1, 3, 5]
     assert parse_pages("impares", 5) == [1, 3, 5]

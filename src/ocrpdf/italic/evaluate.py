@@ -139,20 +139,63 @@ def _split(pieces: list[tuple[str, bool, float]]) -> list[tuple[str, bool]]:
     return words
 
 
+_MIN_RUN = 3   # trecho mínimo (tokens consecutivos) aceito fora da ordem global
+
+
 def project(ref: list[tuple[str, bool]], page_tokens: dict[int, list[str]]) -> dict[int, list[bool]]:
     """Marcas da referência nos tokens do escaneado, alinhadas pelo texto normalizado.
 
-    Só os trechos em que os dois textos coincidem recebem a marca; o resto fica sem itálico."""
+    Primeiro um alinhamento global (ordem preservada); depois, cada trecho de ao menos 3 tokens
+    do escaneado ainda sem par é procurado em qualquer lugar entre os tokens ainda livres da
+    referência (ela pode pôr blocos, como notas, em outra ordem). Um token da referência não é
+    usado duas vezes; o que não casa fica sem itálico."""
     pages = sorted(page_tokens)
     flat = [(p, i) for p in pages for i in range(len(page_tokens[p]))]
     mine = [normalize(page_tokens[p][i]) for p, i in flat]
     theirs = [normalize(w) for w, _ in ref]
     out = {p: [False] * len(page_tokens[p]) for p in pages}
-    matcher = difflib.SequenceMatcher(None, theirs, mine, autojunk=False)
-    for a, b, size in matcher.get_matching_blocks():
+    used = [False] * len(theirs)
+    done = [False] * len(mine)
+
+    def take(a: int, b: int, size: int) -> None:
         for k in range(size):
             p, i = flat[b + k]
             out[p][i] = ref[a + k][1]
+            used[a + k] = done[b + k] = True
+
+    matcher = difflib.SequenceMatcher(None, theirs, mine, autojunk=False)
+    for a, b, size in matcher.get_matching_blocks():
+        take(a, b, size)
+
+    index: dict[tuple[str, ...], list[int]] = {}
+    for j in range(len(theirs) - _MIN_RUN + 1):
+        index.setdefault(tuple(theirs[j:j + _MIN_RUN]), []).append(j)
+
+    runs, i = [], 0
+    while i < len(mine):
+        if done[i]:
+            i += 1
+            continue
+        j = i
+        while j < len(mine) and not done[j]:
+            j += 1
+        runs.append((i, j))
+        i = j
+    while runs:
+        lo, hi = runs.pop()
+        best = (0, 0, 0)   # (tamanho, início na referência, início no escaneado)
+        for b in range(lo, hi - _MIN_RUN + 1):
+            for a in index.get(tuple(mine[b:b + _MIN_RUN]), ()):
+                size = 0
+                while (b + size < hi and a + size < len(theirs) and not used[a + size]
+                       and theirs[a + size] == mine[b + size]):
+                    size += 1
+                if size > best[0]:
+                    best = (size, a, b)
+        size, a, b = best
+        if size >= _MIN_RUN:
+            take(a, b, size)
+            runs += [(lo, b), (b + size, hi)]
     return out
 
 
