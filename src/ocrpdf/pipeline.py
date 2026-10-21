@@ -111,6 +111,8 @@ class Pipeline:
         for n, r in enumerate(layout.regions):
             if r.category in _MEASURED:
                 r.metrics = probe.measure(mask, r.bbox)
+            if r.category in ("title", "section-header"):
+                r.rules = probe.find_rules(mask, r.bbox)
             elif r.category == "picture":
                 name = f"assets/p{layout.index + 1:04d}_fig{n:02d}.png"
                 image.crop(tuple(int(v) for v in r.bbox)).save(self.work / name)

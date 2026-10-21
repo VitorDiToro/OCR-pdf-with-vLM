@@ -9,7 +9,7 @@ from dataclasses import replace
 
 from . import inline, notes
 from .htmlsafe import sanitize_table
-from .model import Block, BlockStyle, Document, Note, PageGeometry, Source, Span
+from .model import Block, BlockStyle, Document, Note, PageGeometry, Rule, Source, Span
 from .ocr.base import PageLayout, Region
 
 _ASCENT_PER_EM = 0.72  # altura das maiúsculas/ascendentes por em (Arial 0,72; Times 0,68)
@@ -318,6 +318,18 @@ class _Builder:
             else:
                 style.align = "left"
                 style.indent_em = round(left / em_pt, 2) if left > 0.5 * em_pt else 0.0
+
+        for rm in r.rules:
+            rule = Rule(
+                thickness_pt=round(max(0.25, rm.thickness_px * k), 2),
+                gap_pt=round(rm.gap_px * k, 2),
+                left_em=round(max(0.0, (rm.x1_px * k - c_left) / em_pt), 2),
+                right_frac=round(min(1.0, max(0.0, (c_right - rm.x2_px * k) / c_width)), 3),
+            )
+            if rm.position == "below":
+                style.rule_below = rule
+            else:
+                style.rule_above = rule
         return style
 
     def _on_recurring_left(self, page: PageLayout, r: Region, left: float) -> bool:

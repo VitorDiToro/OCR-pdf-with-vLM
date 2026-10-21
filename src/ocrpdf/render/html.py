@@ -90,8 +90,16 @@ class _HtmlRenderer:
         st = b.style
         if b.kind in ("paragraph", "list_item", "caption", "title", "heading") and st.align != "justify":
             css.append(f"text-align:{st.align}")
-        if st.indent_em and st.align in ("justify", "left"):
-            css.append(f"text-indent:{st.indent_em:g}em")
+        indent = st.indent_em
+        for side, rule in (("top", st.rule_above), ("bottom", st.rule_below)):
+            if rule is None:
+                continue
+            # o filete é a borda do bloco; o texto mantém a posição original via text-indent
+            css.append(f"margin-left:{rule.left_em:g}em;margin-right:{rule.right_frac * 100:.1f}%;"
+                       f"border-{side}:{rule.thickness_pt:g}pt solid;padding-{side}:{rule.gap_pt:g}pt")
+            indent = max(0.0, indent - rule.left_em)
+        if indent and st.align in ("justify", "left"):
+            css.append(f"text-indent:{indent:g}em")
         if st.font_size_pt:
             css.append(f"font-size:{st.font_size_pt:g}pt")
         return f' style="{";".join(css)}"' if css else ""
