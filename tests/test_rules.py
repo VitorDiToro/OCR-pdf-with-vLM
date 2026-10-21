@@ -7,7 +7,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 from ocrpdf import probe
 from ocrpdf.model import Block, BlockStyle, Document, PageGeometry, Rule, Span
-from ocrpdf.ocr.base import PageLayout
+from ocrpdf.assemble import assemble
+from ocrpdf.ocr.base import LineMetrics, PageLayout, Region, RuleMetrics
 from ocrpdf.pipeline import Pipeline
 from ocrpdf.render import render_pdf
 from synth import FakeEngine, benjamin_like_page, make_pdf
@@ -148,3 +149,41 @@ def test_old_files_without_rules_load(tmp_path):
     path.write_text(json.dumps(d))
     loaded = Document.load(path)
     assert loaded.blocks[0].style.rule_below is None
+
+
+def test_rule_between_two_titles_goes_to_one_of_them(tmp_path):
+    # título / filete / subtítulo: o filete fica abaixo de um e acima do outro, mas é um só
+    img, d = _blank_page()
+    font = ImageFont.truetype(_LIBERATION.format("Sans-Bold"), 40)
+    d.text((151, 100), "Primeira Parte", font=font, fill=0)
+    a = d.textbbox((151, 100), "Primeira Parte", font=font)
+    d.rectangle((151, a[3] + 10, 1500, a[3] + 11), fill=0)
+    d.text((151, a[3] + 14), "Capitulo Um", font=font, fill=0)
+    b = d.textbbox((151, a[3] + 14), "Capitulo Um", font=font)
+    mask = probe.ink_mask(img)
+    # controle: cada título, sozinho, acha o mesmo filete
+    assert [r.position for r in probe.find_rules(mask, a)] == ["below"]
+    assert [r.position for r in probe.find_rules(mask, b)] == ["above"]
+    regions = [Region("section-header", a, "Primeira Parte"), Region("section-header", b, "Capitulo Um")]
+    pdf = make_pdf(tmp_path / "in.pdf", [img])
+    Pipeline(FakeEngine([regions]), tmp_path / "w", workers=1).analyze(pdf, font="sans")
+    found = [rm for r in PageLayout.load(tmp_path / "w" / "pages" / "page_0001.json").regions for rm in r.rules]
+    assert len(found) == 1
+
+
+def test_rule_of_a_title_inside_a_column_is_not_drawn():
+    # TODO: geometria do filete por coluna. Hoje left_em/right_frac são da área de texto da página e
+    # um título de coluna é desenhado dentro de div.cols: o filete sairia deslocado. Só o de largura total.
+    body = LineMetrics(lines=8, line_pitch_px=32.0, ascent_px=21.0, first_indent_px=0.0, align="justify")
+    one = LineMetrics(lines=1, line_pitch_px=0.0, ascent_px=27.0, first_indent_px=0.0, align="left")
+    regions = [Region("title", (151, 150, 1547, 200), "Título", one,
+                      rules=[RuleMetrics("below", 151, 1547, 206, 2, 4)]),
+               Region("section-header", (880, 260, 1300, 300), "Seção", one,
+                      rules=[RuleMetrics("below", 880, 1547, 306, 2, 4)])]
+    for col in (151, 880):                 # duas colunas de texto
+        regions += [Region("text", (col, y, col + 667, y + 260), "texto", body) for y in (330, 620, 910, 1200)]
+    doc = assemble([PageLayout(0, 1700, 2200, 612.0, 792.0, regions)])
+    assert doc.columns == 2
+    title, header = doc.blocks[0], next(b for b in doc.blocks if b.kind == "heading")
+    assert title.style.full_width and title.style.rule_below is not None
+    assert not header.style.full_width and header.style.rule_below is None

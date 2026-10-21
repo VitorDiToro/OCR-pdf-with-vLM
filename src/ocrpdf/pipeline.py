@@ -209,6 +209,7 @@ class Pipeline:
                 name = f"assets/p{layout.index + 1:04d}_fig{n:02d}.png"
                 image.crop(tuple(int(v) for v in r.bbox)).save(self.work / name)
                 r.image = name
+        _drop_shared_rules(layout.regions)
         return layout
 
     def _request_marks(self, pdf_path: Path, evidence: dict[tuple[int, int], BlockEvidence],
@@ -324,6 +325,21 @@ class _Watched:
         except Exception as exc:
             self.error = exc
             raise
+
+
+def _drop_shared_rules(regions: list[Region]) -> None:
+    """Um filete entre dois títulos vizinhos é achado pelos dois (abaixo de um, acima do outro) e
+    sairia desenhado duas vezes: fica com o título mais perto dele (menor folga); no empate, o de cima."""
+    found = [rm for r in regions for rm in r.rules]
+    drop = set()
+    for i, a in enumerate(found):
+        for b in found[i + 1:]:
+            same_y = abs(a.y_px - b.y_px) <= max(a.thickness_px, b.thickness_px) + 1
+            if same_y and min(a.x2_px, b.x2_px) > max(a.x1_px, b.x1_px):
+                keep_a = (a.gap_px, a.position == "above") <= (b.gap_px, b.position == "above")
+                drop.add(id(b) if keep_a else id(a))
+    for r in regions:
+        r.rules = [rm for rm in r.rules if id(rm) not in drop]
 
 
 def _overlaps(bbox: tuple[float, float, float, float],

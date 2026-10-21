@@ -360,7 +360,10 @@ class _Builder:
                 style.align = "left"
                 style.indent_em = round(left / em_pt, 2) if left > 0.5 * em_pt else 0.0
 
-        for rm in r.rules:
+        # TODO: geometria do filete por coluna. left_em/right_frac são relativos à área de texto da
+        # página, mas um bloco de coluna é desenhado dentro de div.cols (o filete sairia deslocado ou
+        # com o comprimento errado): por ora, só blocos de largura total levam filete.
+        for rm in r.rules if style.full_width else ():
             rule = Rule(
                 thickness_pt=round(max(0.25, rm.thickness_px * k), 2),
                 gap_pt=round(rm.gap_px * k, 2),
