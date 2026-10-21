@@ -129,6 +129,36 @@ def _column_count(pages: list[PageLayout], content: dict[int, tuple[float, float
     return 1 if ratio > 0.6 else min(3, max(2, round(1 / ratio)))
 
 
+def _left_positions(
+    pages: list[PageLayout],
+    content: dict[int, tuple[float, float]],
+    body_font_pt: float,
+) -> list[tuple[float, tuple[int, int]]]:
+    """Onde cada bloco começa à esquerda: `(deslocamento_pt, (página, região))`.
+
+    O deslocamento é contado a partir da esquerda da área de texto da página. Linha única
+    (título, subtítulo, texto) conta pelo início do bbox; texto de várias linhas conta pelo
+    início + recuo da 1ª linha. Quem começa a menos de 1 em da margem já é `left` e não entra.
+    """
+    stops: list[tuple[float, tuple[int, int]]] = []
+    for p in pages:
+        if p.index not in content:
+            continue
+        c_left = content[p.index][0]
+        for i, r in enumerate(p.regions):
+            m = r.metrics
+            if r.category not in ("title", "section-header", "text") or not m:
+                continue
+            offset = r.bbox[0] * p.px_to_pt - c_left
+            if m.lines > 1:
+                if m.first_indent_px <= 0:
+                    continue
+                offset += m.first_indent_px * p.px_to_pt
+            if offset >= body_font_pt:
+                stops.append((offset, (p.index, i)))
+    return stops
+
+
 def _running_header(doc: Document, pages: list[PageLayout]) -> None:
     texts: Counter[str] = Counter()
     align: dict[str, str] = {}
@@ -185,8 +215,10 @@ class _Builder:
         self.in_endnotes = False
         self.last_note: Note | None = None
         self.prev_body_region: tuple[PageLayout, Region] | None = None
+        self.left_stops: list[tuple[float, tuple[int, int]]] = []
 
     def run(self, pages: list[PageLayout]) -> None:
+        self.left_stops = _left_positions(pages, self.content, self.doc.body_font_pt)
         for page in pages:
             for region in page.regions:
                 self._region(page, region)
@@ -275,7 +307,11 @@ class _Builder:
             # linha única: alinhamento relativo à área de texto da página
             left, right = x1 - c_left, c_right - x2
             tol = c_width * 0.04
-            if left > tol and right > tol and abs(left - right) < tol:
+            if self._on_recurring_left(page, r, left):
+                # mesma posição de outros blocos (recuo de parágrafo, subtítulos): é `left`
+                style.align = "left"
+                style.indent_em = round(left / em_pt, 2)
+            elif left > tol and right > tol and abs(left - right) < tol:
                 style.align = "center"
             elif left > right + tol and right < tol:
                 style.align = "right"
@@ -283,6 +319,13 @@ class _Builder:
                 style.align = "left"
                 style.indent_em = round(left / em_pt, 2) if left > 0.5 * em_pt else 0.0
         return style
+
+    def _on_recurring_left(self, page: PageLayout, r: Region, left: float) -> bool:
+        """Há ≥ 2 outros blocos começando (quase) no mesmo x? Um bloco não apoia a si mesmo."""
+        me = next((i for i, o in enumerate(page.regions) if o is r), -1)
+        tol = 0.6 * self.doc.body_font_pt
+        support = sum(1 for off, key in self.left_stops if key != (page.index, me) and abs(off - left) <= tol)
+        return support >= 2
 
     # -- parágrafos que atravessam páginas/colunas
 
