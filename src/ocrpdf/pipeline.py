@@ -68,6 +68,15 @@ class Pipeline:
                     jobs = [(i, *self._rasterize(pdf, i)) for i in todo[start:start + batch]]
                     for layout in pool.map(lambda job: self._analyze_page(*job), jobs):
                         log.info("página %d: %d regiões", layout.index + 1, len(layout.regions))
+            # as medidas da probe vêm sempre da imagem (o cache guarda o OCR; as medidas são
+            # regravadas), assim ajustes nas heurísticas valem sem refazer o OCR
+            for i in indices:
+                image, _, _ = self._rasterize(pdf, i)
+                layout = PageLayout.load(self._cache(i))
+                k = image.width / layout.width_px  # o cache pode ter vindo de outro --dpi
+                if k != 1:
+                    image = image.resize((layout.width_px, layout.height_px), Image.LANCZOS)
+                self._measure(layout, image).save(self._cache(i))
         finally:
             pdf.close()
 
@@ -91,18 +100,21 @@ class Pipeline:
         return image, w_pt, h_pt
 
     def _analyze_page(self, index: int, image: Image.Image, w_pt: float, h_pt: float) -> PageLayout:
-        regions = self.engine.analyze(image)
+        layout = PageLayout(index=index, width_px=image.width, height_px=image.height,
+                            width_pt=w_pt, height_pt=h_pt, regions=self.engine.analyze(image))
+        layout.save(self._cache(index))
+        return layout
+
+    def _measure(self, layout: PageLayout, image: Image.Image) -> PageLayout:
+        """Recalcula as medidas de cada região a partir da imagem e recorta as figuras."""
         mask = probe.ink_mask(image)
-        for n, r in enumerate(regions):
+        for n, r in enumerate(layout.regions):
             if r.category in _MEASURED:
                 r.metrics = probe.measure(mask, r.bbox)
             elif r.category == "picture":
-                name = f"assets/p{index + 1:04d}_fig{n:02d}.png"
+                name = f"assets/p{layout.index + 1:04d}_fig{n:02d}.png"
                 image.crop(tuple(int(v) for v in r.bbox)).save(self.work / name)
                 r.image = name
-        layout = PageLayout(index=index, width_px=image.width, height_px=image.height,
-                            width_pt=w_pt, height_pt=h_pt, regions=regions)
-        layout.save(self._cache(index))
         return layout
 
     def _font_family(self, pdf_path: Path, layouts: list[PageLayout], font: str, force: bool) -> str:
