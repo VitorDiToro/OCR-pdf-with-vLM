@@ -1,8 +1,9 @@
 """Evidência de itálico por bloco (marcas do dots, inclinação na imagem, marcas do 2º modelo) e fusão.
 
-Precisão > cobertura: uma palavra só vira itálico se alguma fonte candidata a marcou **e** a imagem
-confirma. Só as marcas do 2º modelo vão para o cache (custam uma chamada); os tokens e a inclinação
-são recalculados a cada execução.
+Regra padrão (`slant`): onde a inclinação foi medida, ela decide; onde não foi, vale o dots. As regras
+`r1`/`r2` (opcionais) consultam também o 2º modelo: uma palavra só vira itálico se alguma fonte
+candidata a marcou **e** a imagem confirma. Só as marcas do 2º modelo vão para o cache (custam uma
+chamada); os tokens e a inclinação são recalculados a cada execução.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from .slant import ITALIC_MIN_DEG, SUSPECT_DEG, baseline_deg, slant_deg, word_bo
 from .words import has_math, italic_flags, tokens
 
 ELIGIBLE = {"text", "list-item", "caption", "footnote", "title", "section-header"}
+MODEL_RULES = ("r1", "r2")   # regras que consultam o 2º modelo
 
 _SHORT = 3       # palavra com até tantas letras não tem haste para medir: herda dos vizinhos
 _NEIGHBOURS = 2  # posições vasculhadas de cada lado atrás de uma palavra medida
@@ -100,8 +102,20 @@ def fusable(ev: BlockEvidence) -> bool:
     return ev.model is not None and any(s is not None for s in ev.slant)
 
 
+def uses_model(rule: str) -> bool:
+    return rule in MODEL_RULES
+
+
+def slant_flags(ev: BlockEvidence) -> list[bool]:
+    """Regra padrão, sem 2º modelo: onde há medida, a inclinação decide; onde não há, vale o dots."""
+    return [d if s is None else s >= ITALIC_MIN_DEG for d, s in zip(ev.dots, ev.slant)]
+
+
 def final_flags(ev: BlockEvidence, rule: str) -> list[bool]:
-    """Flags que a conversão aplica ao bloco: a fusão onde ela vale; fora disso, as marcas do dots."""
+    """Flags que a conversão aplica ao bloco. `slant`: a inclinação medida (sem medida, o dots).
+    `r1`/`r2`: a fusão onde ela vale; fora disso, as marcas do dots."""
+    if rule == "slant":
+        return slant_flags(ev)
     return fuse(ev, rule) if fusable(ev) else list(ev.dots)
 
 

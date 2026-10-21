@@ -137,3 +137,10 @@ def test_final_flags_mirrors_pipeline_rule():
     fundido = BlockEvidence(0, ["abc", "defg"], [True, False], [30.0, 30.0], model=[False, True])
     assert final_flags(fundido, "r1") == [False, True]
     assert final_flags(fundido, "r2") == [True, True]
+
+
+def test_slant_rule_measure_decides_and_dots_fills_gaps():
+    # regra padrão: a inclinação medida decide (≥ 7°); sem medida, vale o dots; o 2º modelo não conta
+    ev = BlockEvidence(0, ["a", "b", "c", "d"], [True, False, True, False], [1.0, 9.0, None, None],
+                       model=[True, True, False, True])
+    assert final_flags(ev, "slant") == [False, True, True, False]

@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
-# Sobe o par de servidores vLLM do modo sleep (padrão do ocrpdf): dots.mocr (OCR) em :8000 e o
-# 2º modelo (marcação de itálico) em :8001. Os dois ficam no ar na mesma GPU; só um fica acordado
-# por vez e a aplicação os alterna com /sleep e /wake_up (ver src/ocrpdf/servers.py).
+# Só para o itálico com 2º modelo (ocrpdf --italic-rule r1|r2); a regra padrão (slant) precisa
+# apenas de scripts/serve_vllm.sh.
+# Sobe o par de servidores vLLM do modo sleep: dots.mocr (OCR) em :8000 e o 2º modelo (marcação de
+# itálico) em :8001. Os dois ficam no ar na mesma GPU; só um fica acordado por vez e a aplicação os
+# alterna com /sleep e /wake_up (ver src/ocrpdf/servers.py).
 # Partida do dots.mocr ~2 min numa RTX 3060; depois de ele dormir, o 2º modelo sobe com a memória
 # que sobrou (serve_vllm.sh calcula GPU_MEM pela VRAM livre).
+# Cuidado num desktop: com o par no ar sobra ~0,5 GiB de VRAM para a interface gráfica; numa
+# execução assim o gnome-shell caiu e levou a sessão junto. Feche programas que usam a GPU.
 #
 # Uso: scripts/serve_pair.sh [modelo_italico]
-#   padrão: Qwen/Qwen3-VL-8B-Instruct-FP8 (provisório)
+#   padrão: cyankiwi/Qwen3-VL-8B-Instruct-AWQ-4bit (o mesmo de ITALIC_HF_MODEL em src/ocrpdf/servers.py)
 # Variáveis: LOG_DIR (padrão /tmp; logs ocrpdf-ocr.log e ocrpdf-italic.log) e as de serve_vllm.sh.
 # Ctrl+C (ou falha na partida) derruba os dois servidores.
 set -euo pipefail
 
-ITALIC_MODEL="${1:-Qwen/Qwen3-VL-8B-Instruct-FP8}"
+ITALIC_MODEL="${1:-cyankiwi/Qwen3-VL-8B-Instruct-AWQ-4bit}"
 LOG_DIR="${LOG_DIR:-/tmp}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export SLEEP_MODE=1
@@ -52,7 +56,8 @@ wait_ready ocr 8000 "${PIDS[0]}"
 curl -sf -X POST "http://127.0.0.1:8000/sleep?level=1" >/dev/null
 echo "[ocr] dormindo" >&2
 
-start italic "${ITALIC_MODEL}" 8001
+# mesmos limites de ITALIC_SERVER_ENV (src/ocrpdf/servers.py): recortes pequenos, contexto curto
+MAX_IMAGE_PX=1605632 MAX_LEN=8192 MAX_SEQS=2 start italic "${ITALIC_MODEL}" 8001
 wait_ready italic 8001 "${PIDS[1]}"
 echo "par no ar: ocr :8000 (dormindo), italic :8001 (acordado). Ctrl+C para encerrar." >&2
 # A aplicação alterna os dois; aqui só esperamos Ctrl+C ou a queda de um servidor.

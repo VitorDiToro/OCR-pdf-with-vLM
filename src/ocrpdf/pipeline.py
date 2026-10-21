@@ -18,7 +18,8 @@ from PIL import Image
 from . import probe
 from .assemble import assemble
 from .italic.marker import mark_italics
-from .italic.stage import BlockEvidence, fuse, fusable, load_marks, needs_model, page_evidence, save_marks, tokens_key
+from .italic.stage import (BlockEvidence, final_flags, load_marks, needs_model, page_evidence, save_marks,
+                           tokens_key, uses_model)
 from .model import Document
 from .ocr.base import OcrEngine, PageLayout, Region
 from .servers import NullSwitcher, Switcher
@@ -38,11 +39,13 @@ _CROP_PAD = 8      # folga (px) em torno do bbox no recorte enviado ao 2º model
 
 @dataclass
 class ItalicConfig:
-    """Etapa 2: o 2º modelo (só marca itálico), o id dele no cache das marcas e a regra de fusão."""
+    """Etapa 2: a regra do itálico por palavra. A padrão (`slant`) só mede a inclinação na imagem;
+    `r1`/`r2` consultam também o 2º modelo (`engine`, que só marca itálico; `model_id` vai para o
+    cache das marcas)."""
 
-    engine: OcrEngine
-    model_id: str
-    rule: str = "r2"
+    engine: OcrEngine | None = None
+    model_id: str = ""
+    rule: str = "slant"
     workers: int = 4
 
 
@@ -89,12 +92,12 @@ class Pipeline:
             italic = None
             if self.italic:
                 evidence = self.collect_evidence(pdf_path, pages)
-                self._request_marks(pdf_path, evidence, force)
-                # só blocos com marcas do 2º modelo e alguma inclinação medida; os demais ficam com os
-                # spans do OCR, intactos (itálico parcial de palavra, como "*Aura*s", não cabe nas
-                # marcas por token; sem medida nenhuma, a fusão descartaria todo o itálico do dots)
-                italic = {key: fuse(ev, self.italic.rule) for key, ev in evidence.items()
-                          if fusable(ev)}
+                if uses_model(self.italic.rule):
+                    self._request_marks(pdf_path, evidence, force)
+                # só os blocos em que a regra muda alguma palavra; os demais ficam com os spans do OCR,
+                # intactos (itálico parcial de palavra, como "*Aura*s", não cabe nas flags por token)
+                italic = {key: flags for key, ev in evidence.items()
+                          if (flags := final_flags(ev, self.italic.rule)) != ev.dots}
             else:
                 self._measure_pages(pdf_path, indices)
         finally:
@@ -109,10 +112,10 @@ class Pipeline:
 
     def collect_evidence(self, pdf_path: Path, pages: str | None = None) -> dict[tuple[int, int], BlockEvidence]:
         """Mede as páginas (o OCR precisa estar em cache) e devolve a evidência de itálico de cada
-        bloco elegível, com chave `(página, região)`. Os blocos suspeitos recebem as marcas do 2º
-        modelo que estiverem em cache; nenhum servidor é chamado."""
+        bloco elegível, com chave `(página, região)`. Nas regras com 2º modelo, os blocos suspeitos
+        recebem as marcas dele que estiverem em cache; nenhum servidor é chamado."""
         evidence = self._measure_pages(pdf_path, self._indices(pdf_path, pages), evidence=True)
-        if self.italic:
+        if self.italic and uses_model(self.italic.rule):
             for page, evs in _by_page(evidence).items():
                 cached = load_marks(self._marks(page), self.italic.model_id)
                 for ev in evs:

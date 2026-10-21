@@ -17,8 +17,13 @@ from typing import Protocol
 
 import httpx
 
-# Provisório; a escolha definitiva do 2º modelo é feita na Task 10.
-ITALIC_HF_MODEL = "Qwen/Qwen3-VL-8B-Instruct-FP8"
+# 2º modelo (opcional, --italic-rule r1/r2): o que marcou mais itálico entre os que cabem numa RTX 3060
+# (docs/superpowers/reports/2026-10-21-italico-avaliacao.md).
+ITALIC_HF_MODEL = "cyankiwi/Qwen3-VL-8B-Instruct-AWQ-4bit"
+# Variáveis de scripts/serve_vllm.sh para o servidor do 2º modelo: os recortes de bloco têm ~0,4 MP;
+# sem limite, o vLLM reserva memória para a imagem máxima do Qwen3-VL (16,7 MP) e o 8B não cabe em 12 GB.
+# Com 4 requisições simultâneas, o encoder estourou a VRAM em recortes grandes; com 2, não.
+ITALIC_SERVER_ENV = {"MAX_IMAGE_PX": "1605632", "MAX_LEN": "8192", "MAX_SEQS": "2"}
 
 _STOP_TIMEOUT = 90.0
 
@@ -94,14 +99,15 @@ class SleepSwitcher:
 
 
 class RestartSwitcher:
-    """Mantém um servidor por vez, iniciando-o com `script modelo porta`."""
+    """Mantém um servidor por vez, iniciando-o com `script modelo porta` (e as variáveis de `env[papel]`)."""
 
     def __init__(self, models: dict[str, tuple[str, int]], script: Path, log_dir: Path,
-                 ready_timeout: float = 900.0):
+                 ready_timeout: float = 900.0, env: dict[str, dict[str, str]] | None = None):
         self.models = models
         self.script = Path(script)
         self.log_dir = Path(log_dir)
         self.ready_timeout = ready_timeout
+        self.env = env or {}
         self._proc: subprocess.Popen | None = None
         self._role: str | None = None
 
@@ -116,6 +122,7 @@ class RestartSwitcher:
             self._proc = subprocess.Popen(
                 [str(self.script), model, str(port)],
                 stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
+                env={**os.environ, **self.env.get(role, {})},
             )
         self._role = role
         self._wait_ready(port, log_path)

@@ -19,7 +19,7 @@ from ocrpdf.italic.words import italic_flags, tokens
 from ocrpdf.model import Document, Span
 from ocrpdf.ocr.base import PageLayout, Region
 from ocrpdf.pipeline import ItalicConfig, Pipeline
-from ocrpdf.servers import ITALIC_HF_MODEL, RestartSwitcher, SleepSwitcher
+from ocrpdf.servers import ITALIC_HF_MODEL, ITALIC_SERVER_ENV, RestartSwitcher, SleepSwitcher
 from synth import FakeEngine, bbox_of, benjamin_like_page, flat_words, make_pdf, sample_lines, text_image
 
 # palavras 3 e 4 ("Pequena história") impressas em itálico; as demais, normais
@@ -169,6 +169,33 @@ def test_r2_keeps_dots_italic_confirmed_by_slant(tmp_path):
     assert doc_italics(r.doc) == {TOKS[2], TOKS[3]}
 
 
+def test_slant_rule_needs_no_second_model(tmp_path):
+    # regra padrão: a inclinação decide; o dots marcou a 3 (itálica) e a 7 (impressa normal) e perdeu a 4
+    sw = RecordingSwitcher()
+    r = run(tmp_path, dots={2, 6}, rule="slant", switcher=sw)
+    assert doc_italics(r.doc) == {TOKS[2], TOKS[3]}
+    assert r.marker.asked == 0 and sw.roles == ["ocr"] and sw.closed == 1
+    assert not (tmp_path / "w" / "italic").exists()
+
+
+def test_default_italic_config_is_the_slant_rule(tmp_path):
+    image, regions = page(("text", BODY, markdown(TOKS, {6})))
+    pdf = make_pdf(tmp_path / "in.pdf", [image])
+    config = ItalicConfig()
+    assert (config.engine, config.rule) == (None, "slant")
+    doc = Pipeline(FakeEngine([regions]), tmp_path / "w", workers=1, italic=config).analyze(pdf, font="sans")
+    assert doc_italics(doc) == {TOKS[2], TOKS[3]}
+
+
+def test_slant_rule_keeps_ocr_spans_when_nothing_changes(tmp_path):
+    # a medida confirma o dots em todas as palavras: os spans do OCR ficam intactos ("*Aura*s" incluído)
+    words = "Benjamin discute Auras perdidas na Pequena história recente".split()
+    md = "Benjamin discute *Aura*s perdidas na *Pequena história* recente"
+    r = run(tmp_path, blocks=[("text", [[(w, w in ("Pequena", "história")) for w in words]], md)], rule="slant")
+    (block,) = r.doc.blocks
+    assert [(s.text, s.italic) for s in block.spans] == [(s.text, s.italic) for s in parse_flat(md)]
+
+
 def test_switch_order_and_cache(tmp_path):
     sw = RecordingSwitcher()
     run(tmp_path, answers=[mark(TOKS, {2, 3})], switcher=sw)
@@ -222,14 +249,14 @@ def test_collect_evidence_uses_only_cached_marks(tmp_path):
     run(tmp_path, answers=[mark(TOKS, {2, 3, 6})])
     marker, sw = FakeEngine([]), RecordingSwitcher()
     pipeline = Pipeline(FakeEngine([]), tmp_path / "w", workers=1,
-                        italic=ItalicConfig(marker, "modelo-falso"), switcher=sw)
+                        italic=ItalicConfig(marker, "modelo-falso", rule="r2"), switcher=sw)
     evidence = pipeline.collect_evidence(tmp_path / "in.pdf")
     assert list(evidence) == [(0, 0)]
     ev = evidence[(0, 0)]
     assert ev.tokens == TOKS and ev.model == [i in (2, 3, 6) for i in range(len(TOKS))]
     assert ev.slant[2] > 7 and ev.slant[6] < 2
     assert marker.asked == 0 and sw.roles == []
-    other = Pipeline(FakeEngine([]), tmp_path / "w", workers=1, italic=ItalicConfig(marker, "outro"))
+    other = Pipeline(FakeEngine([]), tmp_path / "w", workers=1, italic=ItalicConfig(marker, "outro", rule="r2"))
     assert other.collect_evidence(tmp_path / "in.pdf", pages="1")[(0, 0)].model is None
 
 
@@ -290,7 +317,7 @@ def test_block_without_slant_evidence_keeps_ocr_spans(tmp_path):
     pdf = make_pdf(tmp_path / "in.pdf", [image])
     marker = FakeEngine([], answers=[mark(toks, dots)])
     pipeline = Pipeline(FakeEngine([[Region("text", (151, 600, 1547, 700), md)]]), tmp_path / "w",
-                        workers=1, italic=ItalicConfig(marker, "modelo-falso"))
+                        workers=1, italic=ItalicConfig(marker, "modelo-falso", rule="r2"))
     doc = pipeline.analyze(pdf, font="sans")
     ev = pipeline.collect_evidence(pdf)[(0, 0)]
     assert marker.asked == 1 and ev.model == [i in dots for i in range(len(toks))]
@@ -361,7 +388,7 @@ def test_cli_italic_options_and_defaults():
     args = cli._parser().parse_args(["analyze", "in.pdf"])
     assert args.server == "http://127.0.0.1:8000/v1"
     assert (args.italic_server, args.italic_model, args.italic_preset) == ("http://127.0.0.1:8001/v1", "model", "qwen3vl")
-    assert (args.italic_rule, args.switch, args.no_italic) == ("r2", "sleep", False)
+    assert (args.italic_rule, args.switch, args.no_italic) == ("slant", "sleep", False)
     assert (args.ocr_hf_model, args.italic_hf_model) == ("rednote-hilab/dots.mocr", ITALIC_HF_MODEL)
     assert cli._parser().parse_args(["convert", "in.pdf", "--no-italic", "--italic-rule", "r1"]).italic_rule == "r1"
     with pytest.raises(SystemExit):
@@ -397,9 +424,18 @@ def test_cli_restart_mode_uses_hf_models(tmp_path, monkeypatch):
     sw = cli._switcher(args, tmp_path)
     assert isinstance(sw, RestartSwitcher)
     assert sw.models == {"ocr": ("rednote-hilab/dots.mocr", 8000), "italic": (ITALIC_HF_MODEL, 8001)}
+    assert sw.env == {"italic": ITALIC_SERVER_ENV}
     config = cli._italic(args)
     assert (config.model_id, config.rule, config.workers) == (ITALIC_HF_MODEL, "r1", 4)
     assert cli._italic(cli._parser().parse_args(["analyze", "in.pdf", "--no-italic"])) is None
+
+
+def test_cli_slant_rule_needs_only_the_ocr_server(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "_served_model", lambda *a, **kw: pytest.fail("a regra slant não consulta o 2º modelo"))
+    config = cli._italic(cli._parser().parse_args(["analyze", "in.pdf"]))
+    assert (config.engine, config.rule, config.workers) == (None, "slant", 4)
+    restart = cli._switcher(cli._parser().parse_args(["analyze", "in.pdf", "--switch", "restart"]), tmp_path)
+    assert restart.models == {"ocr": ("rednote-hilab/dots.mocr", 8000)}   # só sobe o dots
 
 
 def test_cli_no_italic_switchers(tmp_path):
@@ -435,5 +471,5 @@ def test_cli_reports_server_error_without_traceback(tmp_path, monkeypatch, capsy
     def down(*a, **kw):
         raise RuntimeError("servidor do itálico inacessível; suba o par com scripts/serve_pair.sh")
     monkeypatch.setattr(cli, "_served_model", down)
-    assert cli.main(["analyze", str(tmp_path / "in.pdf"), "-w", str(tmp_path / "w")]) == 1
+    assert cli.main(["analyze", str(tmp_path / "in.pdf"), "-w", str(tmp_path / "w"), "--italic-rule", "r2"]) == 1
     assert "ocrpdf: erro: servidor do itálico inacessível" in capsys.readouterr().err

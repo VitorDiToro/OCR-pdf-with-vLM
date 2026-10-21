@@ -1,11 +1,12 @@
 #!/usr/bin/env python
-"""Avalia o itálico por palavra contra o gabarito: dots, R1, R2 e (opcional) o PDF de referência.
+"""Avalia o itálico por palavra contra o gabarito: dots, a regra padrão (inclinação) e, opcionais, R1/R2
+(marcas do 2º modelo em cache) e o PDF de referência.
 
 Não chama servidor nenhum: refaz a evidência a partir do cache da pasta de trabalho (OCR em
 `pages/`, marcas do 2º modelo em `italic/`).
 
     uv run python scripts/eval_italic.py --pdf livro.pdf --work livro_work --gold gabarito.json \
-        --italic-model <id usado nas marcas> [--reference ref.pdf] [--pages pares] [--rule r1|r2|ambas]
+        [--italic-model <id usado nas marcas>] [--reference ref.pdf] [--pages pares] [--rule r1|r2|ambas]
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--pdf", type=Path, required=True, help="PDF escaneado")
     ap.add_argument("--work", type=Path, required=True, help="pasta de trabalho com o cache")
     ap.add_argument("--gold", type=Path, required=True, help="gabarito JSON")
-    ap.add_argument("--italic-model", required=True, help="id do 2º modelo nas marcas em cache")
+    ap.add_argument("--italic-model", help="id do 2º modelo nas marcas em cache (inclui as linhas R1/R2)")
     ap.add_argument("--reference", type=Path, help="PDF de referência (outra ferramenta)")
     ap.add_argument("--pages", default="", help="ímpares | pares | 1-3,7 (páginas do escaneado, 1-based)")
     ap.add_argument("--rule", choices=["r1", "r2", "ambas"], default="ambas")
@@ -53,14 +54,18 @@ def main(argv: list[str] | None = None) -> int:
     # só as páginas anotadas no gabarito são avaliadas (página fora dele não é "sem itálico")
     pages = [p for p in parse_pages(args.pages, total) if p in gold_pages]
 
-    pipe = Pipeline(_NoEngine(), args.work, dpi=args.dpi, italic=ItalicConfig(_NoEngine(), args.italic_model))
+    # com uma regra do 2º modelo, a evidência traz as marcas dele em cache
+    italic = ItalicConfig(_NoEngine(), args.italic_model, rule="r2") if args.italic_model else ItalicConfig()
+    pipe = Pipeline(_NoEngine(), args.work, dpi=args.dpi, italic=italic)
     evidence = pipe.collect_evidence(args.pdf)
     toks = page_tokens(evidence)
 
     gold, missing = gold_flags(toks, gold_pages)
 
-    rows = {"dots": page_flags(evidence, lambda ev: ev.dots)}
-    for rule in ("r1", "r2") if args.rule == "ambas" else (args.rule,):
+    rows = {"dots": page_flags(evidence, lambda ev: ev.dots),
+            "inclinação": page_flags(evidence, lambda ev: final_flags(ev, "slant"))}
+    rules = ("r1", "r2") if args.rule == "ambas" else (args.rule,)
+    for rule in rules if args.italic_model else ():
         rows[rule.upper()] = page_flags(evidence, lambda ev, r=rule: final_flags(ev, r))
     if args.reference:
         rows["referência"] = project(reference_tokens(args.reference), toks)

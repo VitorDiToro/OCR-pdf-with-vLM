@@ -15,6 +15,8 @@
 #   --mm-processor-cache-gb 0 (contorno de defeito do vLLM 0.17.1: após /sleep, uma imagem
 #   repetida falha com "Expected a cached item for mm_hash"). Medido numa RTX 3060: partida
 #   do dots.mocr ~2 min; dormir ~1 s, acordar ~1,3 s; dormindo, retém ~232 MiB de VRAM.
+#   MAX_IMAGE_PX (só modelos Qwen3-VL, como o 2º modelo): limita a imagem a tantos pixels e desliga
+#   vídeo; sem isso o vLLM reserva memória para a imagem máxima (16,7 MP) e um 8B não cabe em 12 GB.
 set -euo pipefail
 
 MODEL="${1:-rednote-hilab/dots.mocr}"
@@ -36,6 +38,10 @@ EXTRA=()
 if [[ "${SLEEP_MODE:-0}" == "1" ]]; then
     export VLLM_SERVER_DEV_MODE=1
     EXTRA+=(--enable-sleep-mode --mm-processor-cache-gb 0)
+fi
+if [[ -n "${MAX_IMAGE_PX:-}" ]]; then
+    EXTRA+=(--limit-mm-per-prompt '{"image":1,"video":0}'
+            --mm-processor-kwargs "{\"size\":{\"longest_edge\":${MAX_IMAGE_PX},\"shortest_edge\":65536}}")
 fi
 
 # Contexto de 16k tokens: uma página em ~200 dpi gera ~4-5k tokens de imagem + a resposta.

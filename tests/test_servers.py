@@ -139,6 +139,22 @@ def test_restart_switcher_starts_and_stops(tmp_path):
     assert _down(p2)
 
 
+def test_restart_switcher_passes_role_env(tmp_path):
+    # o servidor do 2º modelo sobe com variáveis próprias (limite de imagem etc.); o do OCR, sem elas
+    script = tmp_path / "serve.sh"
+    script.write_text(f'#!/usr/bin/env bash\necho "MAX_LEN=${{MAX_LEN:-}}"\nexec "{FAKE_SERVE}" "$@"\n')
+    script.chmod(0o755)
+    sw = RestartSwitcher({"ocr": ("m1", _free_port()), "italic": ("m2", _free_port())}, script, tmp_path,
+                         ready_timeout=30, env={"italic": {"MAX_LEN": "8192"}})
+    try:
+        sw.use("ocr")
+        sw.use("italic")
+    finally:
+        sw.close()
+    assert "MAX_LEN=\n" in (tmp_path / "ocr.log").read_text()
+    assert "MAX_LEN=8192\n" in (tmp_path / "italic.log").read_text()
+
+
 def test_restart_switcher_reports_dead_process(tmp_path):
     script = tmp_path / "morre.sh"
     script.write_text("#!/usr/bin/env bash\necho falhou-ao-subir\nexit 3\n")

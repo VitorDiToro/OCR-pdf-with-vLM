@@ -14,12 +14,13 @@ from pathlib import Path
 
 import httpx
 
+from .italic.stage import MODEL_RULES, uses_model
 from .model import Document
 from .ocr.vlm import PRESETS, VlmEngine
 from .output_format import apply_output_format, parse_page_size
 from .pipeline import ItalicConfig, Pipeline
 from .render import render_pdf
-from .servers import ITALIC_HF_MODEL, RestartSwitcher, SleepSwitcher, Switcher, default_script
+from .servers import ITALIC_HF_MODEL, ITALIC_SERVER_ENV, RestartSwitcher, SleepSwitcher, Switcher, default_script
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -54,15 +55,16 @@ def _parser() -> argparse.ArgumentParser:
     ocr.add_argument("--font", default="auto", help='auto | serif | sans | mono | nome de uma família instalada')
     ocr.add_argument("--lang", default="pt-BR", help="idioma do documento (metadado do PDF)")
     ocr.add_argument("--force", action="store_true", help="refaz o OCR e as marcas de itálico mesmo com cache")
-    # etapa 2: itálico por palavra (2º modelo + inclinação medida na imagem)
+    # etapa 2: itálico por palavra (inclinação medida na imagem; opcionalmente, um 2º modelo)
     ocr.add_argument("--no-italic", action="store_true",
-                     help="sem a etapa 2: fica o itálico do OCR (basta o servidor do OCR)")
-    ocr.add_argument("--italic-server", default="http://127.0.0.1:8001/v1", help="URL da API do 2º modelo")
+                     help="sem a etapa 2: fica o itálico do OCR, sem conferir na imagem")
+    ocr.add_argument("--italic-rule", choices=["slant", *MODEL_RULES], default="slant",
+                     help="slant = a inclinação medida na imagem decide; sem medida, vale o OCR (basta o "
+                          "servidor do OCR). Com um 2º modelo no ar (scripts/serve_pair.sh): r1 = só o que ele "
+                          "marcou; r2 = o que o OCR ou ele marcou (nas duas, a inclinação precisa confirmar)")
+    ocr.add_argument("--italic-server", default="http://127.0.0.1:8001/v1", help="URL da API do 2º modelo (r1/r2)")
     ocr.add_argument("--italic-model", default="model", help="nome servido do 2º modelo (--served-model-name)")
     ocr.add_argument("--italic-preset", choices=sorted(PRESETS), default="qwen3vl", help="preset do 2º modelo")
-    ocr.add_argument("--italic-rule", choices=["r1", "r2"], default="r2",
-                     help="fusão: r1 = só o que o 2º modelo marcou; r2 = o que o OCR ou o 2º modelo marcou "
-                          "(nas duas, a inclinação na imagem precisa confirmar)")
     ocr.add_argument("--switch", choices=["sleep", "restart"], default="sleep",
                      help="alternância dos servidores na GPU: sleep = par já no ar (scripts/serve_pair.sh); "
                           "restart = a app sobe e derruba cada um com scripts/serve_vllm.sh")
@@ -141,6 +143,8 @@ def _run_analysis(args, work: Path) -> Document:
 def _italic(args) -> ItalicConfig | None:
     if args.no_italic:
         return None
+    if not uses_model(args.italic_rule):
+        return ItalicConfig(rule=args.italic_rule, workers=args.workers)   # nem consulta o 2º modelo
     # o id entra no cache das marcas: trocar de modelo invalida as marcas antigas
     model_id = args.italic_hf_model if args.switch == "restart" else _served_model(args.italic_server)
     engine = VlmEngine(base_url=args.italic_server, model=args.italic_model, preset=args.italic_preset)
@@ -150,10 +154,10 @@ def _italic(args) -> ItalicConfig | None:
 def _switcher(args, work: Path) -> Switcher:
     if args.switch == "restart":
         models = {"ocr": (args.ocr_hf_model, _port(args.server))}
-        if not args.no_italic:
+        if not args.no_italic and uses_model(args.italic_rule):
             models["italic"] = (args.italic_hf_model, _port(args.italic_server))
-        return RestartSwitcher(models, default_script(), work / "logs")
-    # com --no-italic também: o SleepSwitcher aceita só o dots no ar (até sem modo sleep) e, com o
+        return RestartSwitcher(models, default_script(), work / "logs", env={"italic": ITALIC_SERVER_ENV})
+    # sem 2º modelo também: o SleepSwitcher aceita só o dots no ar (até sem modo sleep) e, com o
     # par no ar, acorda o dots e faz o 2º modelo dormir
     return SleepSwitcher({"ocr": _root(args.server), "italic": _root(args.italic_server)})
 
