@@ -7,7 +7,14 @@
 # Uso: scripts/serve_vllm.sh [modelo] [porta]
 #   modelo padrão: rednote-hilab/dots.mocr (~3B; cabe em GPUs de 8 GB)
 #   alternativa : Qwen/Qwen3-VL-8B-Instruct-FP8 (precisa de ~12 GB; use --preset qwen3vl)
-# Variáveis: GPU_MEM (fração da VRAM), MAX_LEN, MAX_SEQS, VLLM_VERSION.
+# Variáveis: GPU_MEM (fração da VRAM), MAX_LEN, MAX_SEQS, VLLM_VERSION,
+#   HOST (padrão 127.0.0.1: o servidor não fica exposto na rede),
+#   SLEEP_MODE=1 (modo sleep: o servidor pode dormir/acordar via /sleep e /wake_up,
+#   para dois modelos dividirem a GPU; usado por scripts/serve_pair.sh). Com ele:
+#   --enable-sleep-mode, VLLM_SERVER_DEV_MODE=1 (expõe os endpoints) e
+#   --mm-processor-cache-gb 0 (contorno de defeito do vLLM 0.17.1: após /sleep, uma imagem
+#   repetida falha com "Expected a cached item for mm_hash"). Medido numa RTX 3060: partida
+#   do dots.mocr ~2 min; dormir ~1 s, acordar ~1,3 s; dormindo, retém ~232 MiB de VRAM.
 set -euo pipefail
 
 MODEL="${1:-rednote-hilab/dots.mocr}"
@@ -25,13 +32,21 @@ if [[ -z "${GPU_MEM:-}" ]]; then
     echo "GPU_MEM=${GPU_MEM} (livre: ${FREE} de ${TOTAL} MiB)" >&2
 fi
 
+EXTRA=()
+if [[ "${SLEEP_MODE:-0}" == "1" ]]; then
+    export VLLM_SERVER_DEV_MODE=1
+    EXTRA+=(--enable-sleep-mode --mm-processor-cache-gb 0)
+fi
+
 # Contexto de 16k tokens: uma página em ~200 dpi gera ~4-5k tokens de imagem + a resposta.
 # Em GPUs de 8 GB, se faltar memória, reduza para 12288 ou baixe o --dpi do ocrpdf.
 exec uvx --python 3.12 --from "vllm==${VLLM_VERSION}" vllm serve "${MODEL}" \
+    --host "${HOST:-127.0.0.1}" \
     --port "${PORT}" \
     --served-model-name model \
     --trust-remote-code \
     --chat-template-content-format string \
     --gpu-memory-utilization "${GPU_MEM}" \
     --max-model-len "${MAX_LEN:-16384}" \
-    --max-num-seqs "${MAX_SEQS:-4}"
+    --max-num-seqs "${MAX_SEQS:-4}" \
+    "${EXTRA[@]}"
