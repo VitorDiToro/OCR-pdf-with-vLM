@@ -14,8 +14,9 @@ import numpy as np
 
 from ..probe import line_spans
 
-# Valores iniciais: a calibração é feita com os gabaritos dos documentos reais.
-SUSPECT_DEG = 5.0      # a partir daqui a palavra é suspeita: o bloco vai ao 2º modelo
+# Calibrados com os gabaritos (docs/superpowers/reports/2026-10-21-italico-avaliacao.md): a regra
+# padrão fica estável com o limiar entre 4° e 9°; itálico medido 9,5–16,5° (p5–p95), redondo ~0°.
+SUSPECT_DEG = 5.0      # a partir daqui a palavra é suspeita: o bloco vai ao 2º modelo (r1/r2)
 ITALIC_MIN_DEG = 7.0   # a partir daqui a inclinação confirma o itálico
 MIN_CONTRAST = 0.15    # perfil mais achatado que isso (1 − mín/máx): palavra sem hastes, sem medida
 

@@ -28,6 +28,7 @@ publicado em `exemplo/resultado.pdf`.
 | Conteúdo | texto, títulos, notas, **múltiplas colunas, tabelas, figuras, fórmulas** | o usuário marcou todos |
 | Fórmulas | LaTeX → SVG com **ziamath** (WeasyPrint não roda JS/MathJax nem renderiza MathML) | puro Python |
 | vLLM | ambiente **separado** via `uvx` (scripts/serve_vllm.sh), não dependência do projeto | torch/CUDA pesados; a app só faz HTTP |
+| Itálico | por palavra: **inclinação medida na imagem** decide (≥ 7°); sem medida, vale o dots (`--italic-rule slant`). 2º modelo só opcional (`r1`/`r2`) | o 2º modelo quase não marca itálico; `slant` atinge precisão ≥ 90% e supera dots e referência nos 3 documentos (docs/superpowers/reports/2026-10-21-italico-avaliacao.md) |
 
 ## Uso
 
@@ -39,18 +40,23 @@ uv run pytest                         # testes
 uv run ocrpdf convert in.pdf -o out.pdf -v       # OCR + montagem + PDF
 uv run ocrpdf analyze in.pdf -w work/            # só OCR + document.json
 uv run ocrpdf render work/document.json -o out.pdf   # re-renderiza após editar o JSON
+uv run python scripts/eval_italic.py --pdf in.pdf --work work --gold gabarito.json --pages pares
 ```
 
 Opções relevantes: `--preset dots|qwen25vl|qwen3vl`, `--server`, `--model`, `--dpi 200`,
 `--pages "1-3,7"`, `--workers 4`, `--font auto|serif|sans|mono|<família>`, `--lang pt-BR`,
 `--force` (ignora cache), `--no-header`.
+Itálico (etapa 2): `--italic-rule slant` (padrão, só o servidor do OCR) | `r1`/`r2` (2º modelo,
+servidor em :8001: `scripts/serve_pair.sh`, ou `--switch restart` para a app subir/derrubar cada
+servidor; `--italic-server`, `--italic-model`, `--italic-hf-model`); `--no-italic` = itálico do OCR
+sem conferir na imagem.
 Formato de saída (`convert` e `render`; só na renderização, o `document.json` fica no original):
 `--page-size original|a4|<L>x<A>` (cm, aceita vírgula), `--margin 2.5` (cm; só com tamanho
 diferente de `original`), `--font-size PT` (escala corpo, títulos, notas e cabeçalho).
 
 Pasta de trabalho (padrão `<saída>_work/`): `pages/page_NNNN.json` (por página: OCR em cache +
 medidas da probe regravadas a cada execução), `assets/` (recortes de figuras), `meta.json` (fonte
-detectada), `document.json`, `document.html`.
+detectada), `italic/page_NNNN.json` (marcas do 2º modelo, só r1/r2), `document.json`, `document.html`.
 
 ## Arquitetura
 
@@ -83,6 +89,13 @@ src/ocrpdf/
                   (o document.json guarda o formato original medido).
   render/html.py  Document → HTML+CSS; render/style.css (base); render/math.py (ziamath);
   render/__init__  render_pdf() com WeasyPrint (import tardio).
+  italic/         etapa 2, itálico por palavra: words (tokens dos Spans), slant (caixas de palavra
+                  e inclinação, com o bloco endireitado), align (tokens ↔ caixas), stage (evidência
+                  por bloco e regras slant/r1/r2), marker (2º modelo), evaluate (gabarito/referência).
+  servers.py      só r1/r2: SleepSwitcher (par no ar, /sleep e /wake_up) e RestartSwitcher (a app
+                  sobe cada servidor com serve_vllm.sh); ITALIC_HF_MODEL, ITALIC_SERVER_ENV.
+scripts/          serve_vllm.sh (um servidor; GPU_MEM pela VRAM livre; MAX_IMAGE_PX p/ Qwen3-VL),
+                  serve_pair.sh (par dots + 2º modelo), eval_italic.py (precisão/cobertura).
 ```
 
 ### Modelo intermediário (`model.py`)
@@ -158,8 +171,14 @@ src/ocrpdf/
   - O `body` tem margem padrão de 8px (6pt) somada às margens da `@page`: `style.css` zera.
   - `background-size` de gradiente é ignorado no `@footnote` (pinta a área toda de preto).
 - Fonte (`--font auto`): pergunta ao VLM sobre recortes em resolução cheia do maior bloco de
-  texto de 3 páginas e vence a maioria. Com a página reduzida o dots erra; ele raciocina antes de
-  responder (termina em `\boxed{sans}`), por isso `ask` usa 128 tokens e vale a última menção.
+  texto de 5 páginas e vence a maioria. A pergunta descreve as serifas ("small strokes at the
+  ends…, like Times New Roman, or plain like Arial"): a original errava em livros serifados.
+  Com a página reduzida o dots erra; ele raciocina antes de responder (termina em `\boxed{sans}`),
+  por isso `ask` usa 128 tokens e vale a última menção.
+- Itálico (`slant`): caixas de palavra pelas lacunas entre tintas, casadas com os tokens do OCR
+  (bloco sem casamento ≥ `MATCH_MIN` fica sem medida); inclinação = cisalhamento que endireita as
+  hastes, menos a da linha de base. Só os blocos em que a regra muda alguma palavra recebem as
+  flags; os demais mantêm os spans do OCR (itálico parcial "*Aura*s" preservado).
 - Cabeçalho corrente: alinhamento pela folga até as margens (o centro engana com texto longo);
   tamanho medido pela probe (`page-header`/`page-footer` estão em `_MEASURED`).
 
@@ -190,16 +209,27 @@ Feito e conferido:
   `test_rules.py`), cache e medidas (`test_pipeline.py`) e formato de saída (`test_output_format.py`);
   `tests/synth.py` gera a página sintética estilo Benjamin e o `FakeEngine`.
 - `inline.parse` e `probe.measure` conferidos manualmente.
+- **Itálico por palavra** (2026-10-21): avaliado contra gabaritos à mão em 3 documentos (Benjamin;
+  Althusser e Horkheimer em `/home/vitor/Amostras`, com conversões de referência de outras
+  ferramentas; gabaritos e caches deles em `amostras/`, fora do git). Páginas pares, precisão /
+  cobertura da regra `slant`: Benjamin 99,4/89,2 (dots 100/46,1); Althusser 97,6/100 (dots
+  100/97,5; referência 92,5/92,5); Horkheimer 98,6/92,2 (dots 99,3/90,8; referência 98,2/71,2).
+  O 2º modelo (Qwen3-VL 8B-AWQ e 4B-FP8) quase não marca: R1 0,5–60% de cobertura.
+- **VRAM e desktop**: com dois servidores no ar (dots dormindo + 2º modelo), sobram ~0,5 GiB para a
+  interface; numa execução assim o gnome-shell caiu e encerrou a sessão (servidores e Claude Code
+  juntos). Só com um servidor, sem problema.
 
 Ainda não exercitado: ziamath inline, colunas, tabelas, figuras, presets `qwen25vl`/`qwen3vl`.
 
 ## Próximos passos
 
-1. **Itálico**: o dots marca só parte. Marcou as frases longas da p. 1, *A idéia do cinema*,
-   *sui generis*, *cella*; perdeu o subtítulo "Texto de Walter Benjamin…", "Em busca do ouro",
-   "Sonho de uma noite de verão", a citação de Séverin-Mars (p. 6). Comparar com
-   `--preset qwen3vl` (~12 GB: apertado nesta GPU) ou um modo híbrido (layout do dots +
-   re-reconhecimento do texto dos blocos por um VLM genérico).
+1. **Páginas inclinadas** (bloqueia documentos reais): `probe.measure` separa as linhas pela
+   projeção horizontal e exige uma linha de pixels sem tinta entre elas. Com ~1° de inclinação
+   (Horkheimer, Althusser), blocos largos viram uma "linha" só e a fonte medida chega a 95–376 pt:
+   o Horkheimer (49 páginas) sai com 1613. Endireitando o recorte em −1°, o mesmo bloco (p. 8,
+   bbox [148,178,1204,1193]) dá 27 linhas. `italic/slant.py` já endireita o bloco antes de achar
+   as linhas; reaproveitar na probe. Depois, comparar visualmente com as referências
+   (`pdftoppm -r 60`), passo 7 da Task 10 do plano do itálico.
 2. **Testes** restantes: `test_inline.py`, `test_notes.py` (split_label, link por página,
    endnotes, `[n]`, `*`), `test_vlm.py` com `httpx.MockTransport` (cerca, JSON truncado, escala
    pixels/norm1000), `test_assemble.py` com PageLayouts sintéticos (cabeçalho corrente, junção
