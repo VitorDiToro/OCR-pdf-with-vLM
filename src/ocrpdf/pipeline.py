@@ -91,7 +91,9 @@ class Pipeline:
             if self.italic:
                 evidence = self.collect_evidence(pdf_path, pages)
                 self._request_marks(pdf_path, evidence, force)
-                italic = {key: fuse(ev, self.italic.rule) for key, ev in evidence.items()}
+                # só blocos com marcas do 2º modelo; os demais ficam com os spans do OCR, intactos
+                # (itálico parcial de palavra, como "*Aura*s", não cabe nas marcas por token)
+                italic = {key: fuse(ev, self.italic.rule) for key, ev in evidence.items() if ev.model is not None}
             else:
                 self._measure_pages(pdf_path, indices)
         finally:

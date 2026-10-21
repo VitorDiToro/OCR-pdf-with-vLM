@@ -19,8 +19,8 @@ from ocrpdf.italic.words import italic_flags, tokens
 from ocrpdf.model import Document, Span
 from ocrpdf.ocr.base import PageLayout, Region
 from ocrpdf.pipeline import ItalicConfig, Pipeline
-from ocrpdf.servers import ITALIC_HF_MODEL, RestartSwitcher, SleepSwitcher
-from synth import FakeEngine, bbox_of, flat_words, make_pdf, sample_lines, text_image
+from ocrpdf.servers import ITALIC_HF_MODEL, NullSwitcher, RestartSwitcher, SleepSwitcher
+from synth import FakeEngine, bbox_of, benjamin_like_page, flat_words, make_pdf, sample_lines, text_image
 
 # palavras 3 e 4 ("Pequena história") impressas em itálico; as demais, normais
 BODY = [[(w, i in (2, 3)) for i, w in enumerate("Benjamin escreveu Pequena história depois daquela viagem longa".split())]]
@@ -240,6 +240,20 @@ def test_footnote_region_with_label_keeps_alignment(tmp_path):
     assert italic_words(n2.blocks[0].spans) == ["idéia", "do", "cinema"]
 
 
+@pytest.mark.parametrize("sent", [False, True])
+def test_blocks_without_model_marks_keep_ocr_spans(tmp_path, sent):
+    # itálico parcial de palavra ("*Aura*s") não cabe nas marcas por token: sem marcas do 2º modelo
+    # (bloco não suspeito, ou suspeito com resposta rejeitada) os spans do OCR ficam intactos
+    words = "Benjamin discute Auras perdidas na Pequena história recente".split()
+    lines = [[(w, sent and w == "Pequena") for w in words]]    # "Pequena" inclinada → bloco suspeito
+    md = "Benjamin discute *Aura*s perdidas na Pequena história recente"
+    r = run(tmp_path, blocks=[("text", lines, md)], answers=["texto alterado pelo modelo"])
+    assert r.marker.asked == (1 if sent else 0)
+    (block,) = r.doc.blocks
+    assert [(s.text, s.italic) for s in block.spans] == [
+        ("Benjamin discute ", False), ("Aura", True), ("s perdidas na Pequena história recente", False)]
+
+
 def test_no_italic_never_calls_marker(tmp_path):
     sw = RecordingSwitcher()
     r = run(tmp_path, dots={6}, italic=False, switcher=sw)
@@ -341,6 +355,21 @@ def test_cli_restart_mode_uses_hf_models(tmp_path, monkeypatch):
     config = cli._italic(args)
     assert (config.model_id, config.rule, config.workers) == (ITALIC_HF_MODEL, "r1", 4)
     assert cli._italic(cli._parser().parse_args(["analyze", "in.pdf", "--no-italic"])) is None
+
+
+def test_cli_no_italic_never_switches(tmp_path, monkeypatch):
+    # sem a etapa 2 basta o servidor do OCR, que pode ser o serve_vllm.sh simples (sem /is_sleeping)
+    for mode in ("sleep", "restart"):
+        args = cli._parser().parse_args(["analyze", "in.pdf", "--no-italic", "--switch", mode])
+        assert isinstance(cli._switcher(args, tmp_path), NullSwitcher)
+    for name in ("SleepSwitcher", "RestartSwitcher"):
+        monkeypatch.setattr(cli, name, lambda *a, **kw: pytest.fail("--no-italic não alterna servidores"))
+    image, regions = benjamin_like_page()
+    engine = FakeEngine([regions])
+    monkeypatch.setattr(cli, "VlmEngine", lambda **kw: engine)
+    pdf = make_pdf(tmp_path / "in.pdf", [image])
+    assert cli.main(["analyze", str(pdf), "-w", str(tmp_path / "w"), "--no-italic", "--workers", "1"]) == 0
+    assert engine.calls == 1 and (tmp_path / "w" / "document.json").exists()
 
 
 def test_cli_reports_server_error_without_traceback(tmp_path, monkeypatch, capsys):

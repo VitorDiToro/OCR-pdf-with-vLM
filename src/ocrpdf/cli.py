@@ -19,7 +19,7 @@ from .ocr.vlm import PRESETS, VlmEngine
 from .output_format import apply_output_format, parse_page_size
 from .pipeline import ItalicConfig, Pipeline
 from .render import render_pdf
-from .servers import ITALIC_HF_MODEL, RestartSwitcher, SleepSwitcher, Switcher, default_script
+from .servers import ITALIC_HF_MODEL, NullSwitcher, RestartSwitcher, SleepSwitcher, Switcher, default_script
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -55,7 +55,8 @@ def _parser() -> argparse.ArgumentParser:
     ocr.add_argument("--lang", default="pt-BR", help="idioma do documento (metadado do PDF)")
     ocr.add_argument("--force", action="store_true", help="refaz o OCR e as marcas de itálico mesmo com cache")
     # etapa 2: itálico por palavra (2º modelo + inclinação medida na imagem)
-    ocr.add_argument("--no-italic", action="store_true", help="sem a etapa 2: fica o itálico do OCR")
+    ocr.add_argument("--no-italic", action="store_true",
+                     help="sem a etapa 2: fica o itálico do OCR; não alterna servidores (basta o do OCR no ar)")
     ocr.add_argument("--italic-server", default="http://127.0.0.1:8001/v1", help="URL da API do 2º modelo")
     ocr.add_argument("--italic-model", default="model", help="nome servido do 2º modelo (--served-model-name)")
     ocr.add_argument("--italic-preset", choices=sorted(PRESETS), default="qwen3vl", help="preset do 2º modelo")
@@ -147,6 +148,9 @@ def _italic(args) -> ItalicConfig | None:
 
 
 def _switcher(args, work: Path) -> Switcher:
+    if args.no_italic:
+        # só o servidor do OCR, que pode ser o serve_vllm.sh simples (sem modo sleep)
+        return NullSwitcher()
     if args.switch == "restart":
         models = {"ocr": (args.ocr_hf_model, _port(args.server)),
                   "italic": (args.italic_hf_model, _port(args.italic_server))}
