@@ -19,3 +19,6 @@ work/
 # Claude Code (configuração local e worktrees)
 .claude/settings.local.json
 .claude/worktrees/
+
+# Artefatos da execução dos planos (superpowers)
+.superpowers/
