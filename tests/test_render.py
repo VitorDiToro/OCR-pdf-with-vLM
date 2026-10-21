@@ -49,6 +49,18 @@ def _misplaced(pdf: Path) -> list[tuple[str, int, int]]:
     return [p for p in _note_pages(pdf) if p[1] != p[2]]
 
 
+def _text_positions(pdf: Path, page: int = 0) -> list[tuple[str, float, float]]:
+    """(texto, x, y) em pt de cada trecho de texto da página; y cresce para cima."""
+    out = []
+
+    def visitor(text, cm, tm, font_dict, font_size):
+        if text.strip():
+            out.append((text, tm[4] * cm[0] + tm[5] * cm[2] + cm[4], tm[4] * cm[1] + tm[5] * cm[3] + cm[5]))
+
+    PdfReader(pdf).pages[page].extract_text(visitor_text=visitor)
+    return out
+
+
 @pytest.mark.parametrize("make_doc", [_orphans_doc, _overflow_doc], ids=["orphans", "overflow"])
 def test_footnotes_stay_on_the_page_of_their_call(tmp_path: Path, make_doc) -> None:
     out = tmp_path / "out.pdf"

@@ -1,4 +1,5 @@
-"""Orquestra as etapas: PDF → imagens → regiões (cache por página) → Document → PDF."""
+"""Orquestra as etapas: PDF → imagens → regiões (cache por página) → itálico por palavra
+(etapa 2, cache próprio) → Document → PDF."""
 
 from __future__ import annotations
 
@@ -7,25 +8,45 @@ import logging
 import re
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import pypdfium2 as pdfium
 from PIL import Image
 
 from . import probe
 from .assemble import assemble
+from .italic.marker import mark_italics
+from .italic.stage import (BlockEvidence, final_flags, load_marks, needs_model, page_evidence, save_marks,
+                           tokens_key, uses_model)
 from .model import Document
 from .ocr.base import OcrEngine, PageLayout, Region
+from .servers import NullSwitcher, Switcher
 
 log = logging.getLogger(__name__)
 
 _MEASURED = {"text", "title", "section-header", "list-item", "caption", "footnote", "page-header", "page-footer"}
+_RULED = {"title", "section-header"}   # categorias em que se procuram filetes colados
 _FONT_QUESTION = (
-    "Look at the main body text of this page. Is its typeface serif or sans-serif? "
-    "Answer with exactly one word: serif or sans."
+    "Look closely at the letters. Do they have serifs (small strokes at the ends of the strokes, "
+    "like Times New Roman), or are they plain like Arial? Answer with one word: serif or sans."
 )
-_FONT_SAMPLES = 3  # blocos de texto (de páginas diferentes) consultados; vence a maioria
+_FONT_SAMPLES = 5  # blocos de texto (de páginas diferentes) consultados; vence a maioria
 _TYPEFACE = re.compile(r"sans(?:[- ]serif)?|serif", re.I)
+_CROP_PAD = 8      # folga (px) em torno do bbox no recorte enviado ao 2º modelo
+
+
+@dataclass
+class ItalicConfig:
+    """Etapa 2: a regra do itálico por palavra. A padrão (`slant`) só mede a inclinação na imagem;
+    `r1`/`r2` consultam também o 2º modelo (`engine`, que só marca itálico; `model_id` vai para o
+    cache das marcas)."""
+
+    engine: OcrEngine | None = None
+    model_id: str = ""
+    rule: str = "slant"
+    workers: int = 4
 
 
 def _area(r: Region) -> float:
@@ -46,20 +67,86 @@ def parse_page_range(spec: str | None, total: int) -> list[int]:
 
 
 class Pipeline:
-    def __init__(self, engine: OcrEngine, work_dir: Path, dpi: int = 200, workers: int = 4) -> None:
+    def __init__(self, engine: OcrEngine, work_dir: Path, dpi: int = 200, workers: int = 4,
+                 italic: ItalicConfig | None = None, switcher: Switcher | None = None) -> None:
         self.engine = engine
         self.work = work_dir
         self.dpi = dpi
         self.workers = workers
+        self.italic = italic
+        self.switcher = switcher or NullSwitcher()
         (self.work / "pages").mkdir(parents=True, exist_ok=True)
         (self.work / "assets").mkdir(exist_ok=True)
 
     def analyze(self, pdf_path: Path, pages: str | None = None, font: str = "auto",
                 lang: str = "", force: bool = False) -> Document:
+        try:
+            indices = self._indices(pdf_path, pages)
+            todo = [i for i in indices if force or not self._cache(i).exists()]
+            ask_font = font == "auto" and (force or "font_family" not in self._meta())
+            # cada servidor só é acordado (ou iniciado) se houver trabalho para ele
+            if todo or ask_font:
+                self.switcher.use("ocr")
+            self._ocr(pdf_path, todo)
+            family = font if font != "auto" else self._font_family(pdf_path, indices, ask_font)
+            italic = None
+            if self.italic:
+                evidence = self.collect_evidence(pdf_path, pages)
+                if uses_model(self.italic.rule):
+                    self._request_marks(pdf_path, evidence, force)
+                # só os blocos em que a regra muda alguma palavra; os demais ficam com os spans do OCR,
+                # intactos (itálico parcial de palavra, como "*Aura*s", não cabe nas flags por token)
+                italic = {key: flags for key, ev in evidence.items()
+                          if (flags := final_flags(ev, self.italic.rule)) != ev.dots}
+            else:
+                self._measure_pages(pdf_path, indices)
+        finally:
+            # modo restart: derruba o servidor no ar, também se a execução for interrompida
+            self.switcher.close()
+
+        layouts = [PageLayout.load(self._cache(i)) for i in indices]
+        doc = assemble(layouts, source=pdf_path.name, font_family=family, italic=italic)
+        doc.lang = lang
+        doc.save(self.work / "document.json")
+        return doc
+
+    def collect_evidence(self, pdf_path: Path, pages: str | None = None) -> dict[tuple[int, int], BlockEvidence]:
+        """Mede as páginas (o OCR precisa estar em cache) e devolve a evidência de itálico de cada
+        bloco elegível, com chave `(página, região)`. Nas regras com 2º modelo, os blocos suspeitos
+        recebem as marcas dele que estiverem em cache; nenhum servidor é chamado."""
+        evidence = self._measure_pages(pdf_path, self._indices(pdf_path, pages), evidence=True)
+        if self.italic and uses_model(self.italic.rule):
+            for page, evs in _by_page(evidence).items():
+                cached = load_marks(self._marks(page), self.italic.model_id)
+                for ev in evs:
+                    if needs_model(ev) and _usable(cached.get(ev.region), ev):
+                        ev.model = cached[ev.region][1]
+        return evidence
+
+    # -- etapas
+
+    def _cache(self, index: int) -> Path:
+        return self.work / "pages" / f"page_{index + 1:04d}.json"
+
+    def _marks(self, index: int) -> Path:
+        return self.work / "italic" / f"page_{index + 1:04d}.json"
+
+    def _meta(self) -> dict:
+        path = self.work / "meta.json"
+        return json.loads(path.read_text()) if path.exists() else {}
+
+    def _indices(self, pdf_path: Path, pages: str | None) -> list[int]:
         pdf = pdfium.PdfDocument(str(pdf_path))
         try:
-            indices = parse_page_range(pages, len(pdf))
-            todo = [i for i in indices if force or not self._cache(i).exists()]
+            return parse_page_range(pages, len(pdf))
+        finally:
+            pdf.close()
+
+    def _ocr(self, pdf_path: Path, todo: list[int]) -> None:
+        if not todo:
+            return
+        pdf = pdfium.PdfDocument(str(pdf_path))
+        try:
             # pdfium não é thread-safe: rasteriza em série, em lotes pequenos (memória),
             # e paraleliza só as chamadas ao modelo
             batch = max(1, self.workers * 2)
@@ -71,18 +158,6 @@ class Pipeline:
         finally:
             pdf.close()
 
-        layouts = [PageLayout.load(self._cache(i)) for i in indices]
-        family = self._font_family(pdf_path, layouts, font, force)
-        doc = assemble(layouts, source=pdf_path.name, font_family=family)
-        doc.lang = lang
-        doc.save(self.work / "document.json")
-        return doc
-
-    # -- etapas
-
-    def _cache(self, index: int) -> Path:
-        return self.work / "pages" / f"page_{index + 1:04d}.json"
-
     def _rasterize(self, pdf: pdfium.PdfDocument, index: int) -> tuple[Image.Image, float, float]:
         page = pdf[index]
         w_pt, h_pt = page.get_size()
@@ -90,29 +165,116 @@ class Pipeline:
         page.close()
         return image, w_pt, h_pt
 
+    def _page_image(self, pdf: pdfium.PdfDocument, layout: PageLayout) -> Image.Image:
+        """A página no espaço de pixels do OCR em cache (que pode ter vindo de outro --dpi)."""
+        image, _, _ = self._rasterize(pdf, layout.index)
+        if image.size != (layout.width_px, layout.height_px):
+            image = image.resize((layout.width_px, layout.height_px), Image.LANCZOS)
+        return image
+
     def _analyze_page(self, index: int, image: Image.Image, w_pt: float, h_pt: float) -> PageLayout:
-        regions = self.engine.analyze(image)
-        mask = probe.ink_mask(image)
-        for n, r in enumerate(regions):
-            if r.category in _MEASURED:
-                r.metrics = probe.measure(mask, r.bbox)
-            elif r.category == "picture":
-                name = f"assets/p{index + 1:04d}_fig{n:02d}.png"
-                image.crop(tuple(int(v) for v in r.bbox)).save(self.work / name)
-                r.image = name
         layout = PageLayout(index=index, width_px=image.width, height_px=image.height,
-                            width_pt=w_pt, height_pt=h_pt, regions=regions)
+                            width_pt=w_pt, height_pt=h_pt, regions=self.engine.analyze(image))
         layout.save(self._cache(index))
         return layout
 
-    def _font_family(self, pdf_path: Path, layouts: list[PageLayout], font: str, force: bool) -> str:
-        if font != "auto":
-            return font
-        meta_path = self.work / "meta.json"
-        meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
-        if force or "font_family" not in meta:
-            meta["font_family"] = self._ask_font(pdf_path, layouts)
-            meta_path.write_text(json.dumps(meta))
+    def _measure_pages(self, pdf_path: Path, indices: list[int],
+                       evidence: bool = False) -> dict[tuple[int, int], BlockEvidence]:
+        """Passe de medidas sobre as páginas em cache; com `evidence`, devolve também a evidência
+        de itálico. As medidas vêm sempre da imagem (o cache guarda o OCR; as medidas são
+        regravadas), assim ajustes nas heurísticas valem sem refazer o OCR."""
+        out: dict[tuple[int, int], BlockEvidence] = {}
+        pdf = pdfium.PdfDocument(str(pdf_path))
+        try:
+            for i in indices:
+                layout = PageLayout.load(self._cache(i))
+                image = self._page_image(pdf, layout)
+                mask = probe.ink_mask(image)
+                self._measure(layout, image, mask).save(self._cache(i))
+                if evidence:
+                    out.update(((i, ev.region), ev) for ev in page_evidence(layout, mask))
+        finally:
+            pdf.close()
+        return out
+
+    def _measure(self, layout: PageLayout, image: Image.Image, mask: np.ndarray) -> PageLayout:
+        """Recalcula as medidas de cada região a partir da imagem e recorta as figuras."""
+        boxes = [r.bbox for r in layout.regions]
+        for n, r in enumerate(layout.regions):
+            if r.category in _MEASURED:
+                r.metrics = probe.measure(mask, r.bbox, _overlaps(r.bbox, boxes[:n] + boxes[n + 1:]))
+            # zera também as demais categorias: o cache pode trazer filetes de outra versão
+            r.rules = probe.find_rules(mask, r.bbox) if r.category in _RULED else []
+            if r.category == "picture":
+                name = f"assets/p{layout.index + 1:04d}_fig{n:02d}.png"
+                image.crop(tuple(int(v) for v in r.bbox)).save(self.work / name)
+                r.image = name
+        _drop_shared_rules(layout.regions)
+        return layout
+
+    def _request_marks(self, pdf_path: Path, evidence: dict[tuple[int, int], BlockEvidence],
+                       force: bool) -> None:
+        """Pede ao 2º modelo as marcas dos blocos suspeitos que faltam no cache e as grava.
+
+        Resposta recebida que altera o texto vai para o cache como None e não é pedida de novo.
+        Falha (ver `_Watched`) não vai: as marcas já obtidas são gravadas e a execução para com erro.
+        """
+        cfg = self.italic
+        cached: dict[int, dict[int, tuple[str, list[bool] | None]]] = {}
+        missing: dict[int, list[BlockEvidence]] = {}
+        for page, evs in _by_page(evidence).items():
+            cached[page] = {} if force else load_marks(self._marks(page), cfg.model_id)
+            todo = [ev for ev in evs if needs_model(ev) and not _usable(cached[page].get(ev.region), ev)]
+            if todo:
+                missing[page] = todo
+        if not missing:
+            return
+        log.info("itálico: %d blocos para o 2º modelo", sum(len(v) for v in missing.values()))
+        self.switcher.use("italic")
+        pages = sorted(missing)
+        batch = max(1, cfg.workers * 2)
+        pdf = pdfium.PdfDocument(str(pdf_path))
+        try:
+            with ThreadPoolExecutor(max_workers=cfg.workers) as pool:
+                for start in range(0, len(pages), batch):
+                    chunk = pages[start:start + batch]
+                    jobs = []
+                    for page in chunk:
+                        layout = PageLayout.load(self._cache(page))
+                        image = self._page_image(pdf, layout)
+                        jobs += [(page, ev, _crop(image, layout.regions[ev.region].bbox)) for ev in missing[page]]
+                    errors = []
+                    for (page, ev, _), (marks, error) in zip(jobs, pool.map(lambda job: self._mark(*job[1:]), jobs)):
+                        if error is not None:
+                            errors.append(error)
+                            continue
+                        if marks is None:
+                            log.warning("itálico: resposta do 2º modelo rejeitada na pág. %d, bloco %d (alterou o "
+                                        "texto ou foi cortada pelo limite de tokens); vale o itálico do OCR",
+                                        page + 1, ev.region)
+                        ev.model = marks
+                        cached[page][ev.region] = (tokens_key(ev.tokens), marks)
+                    for page in chunk:
+                        save_marks(self._marks(page), cfg.model_id, cached[page])
+                    if errors:
+                        e = errors[0]
+                        raise RuntimeError(
+                            f"o 2º modelo ({cfg.model_id}) falhou em {len(errors)} bloco(s): "
+                            f"{type(e).__name__}: {e}. As marcas obtidas foram gravadas e a próxima "
+                            "execução pede só as que faltam. Confira o servidor e o nome do modelo "
+                            "(--italic-server, --italic-model; modo sleep: suba o par com scripts/serve_pair.sh)")
+        finally:
+            pdf.close()
+
+    def _mark(self, ev: BlockEvidence, crop: Image.Image) -> tuple[list[bool] | None, Exception | None]:
+        engine = _Watched(self.italic.engine)
+        return mark_italics(engine, crop, ev.tokens), engine.error
+
+    def _font_family(self, pdf_path: Path, indices: list[int], ask: bool) -> str:
+        meta = self._meta()
+        if ask:
+            meta["font_family"] = self._ask_font(pdf_path, [PageLayout.load(self._cache(i)) for i in indices])
+            (self.work / "meta.json").write_text(json.dumps(meta))
         return meta["font_family"]
 
     def _ask_font(self, pdf_path: Path, layouts: list[PageLayout]) -> str:
@@ -146,3 +308,76 @@ class Pipeline:
         family = "sans" if votes["sans"] > votes["serif"] else "serif"
         log.info("fonte do corpo: %s (votos: %s)", family, dict(votes) or "nenhum; padrão serif")
         return family
+
+
+class _Watched:
+    """Engine do 2º modelo que guarda a falha de uma chamada. `mark_italics` devolve None tanto para
+    resposta rejeitada quanto para falha; só a resposta recebida que altera o texto vai para o cache.
+    Falha é qualquer exceção do engine (conexão, 404 de modelo inexistente, 5xx, resposta malformada)
+    ou resposta que não é texto."""
+
+    def __init__(self, engine: OcrEngine) -> None:
+        self.engine = engine
+        self.error: Exception | None = None
+
+    def ask(self, image: Image.Image, question: str, max_tokens: int = 128) -> str:
+        try:
+            answer = self.engine.ask(image, question, max_tokens=max_tokens)
+            if not isinstance(answer, str):
+                raise TypeError(f"resposta que não é texto ({type(answer).__name__})")
+            return answer
+        except Exception as exc:
+            self.error = exc
+            raise
+
+
+def _drop_shared_rules(regions: list[Region]) -> None:
+    """Um filete entre dois títulos vizinhos é achado pelos dois (abaixo de um, acima do outro) e
+    sairia desenhado duas vezes: fica com o título mais perto dele (menor folga); no empate, o de cima."""
+    found = [rm for r in regions for rm in r.rules]
+    drop = set()
+    for i, a in enumerate(found):
+        for b in found[i + 1:]:
+            same_y = abs(a.y_px - b.y_px) <= max(a.thickness_px, b.thickness_px) + 1
+            if same_y and min(a.x2_px, b.x2_px) > max(a.x1_px, b.x1_px):
+                keep_a = (a.gap_px, a.position == "above") <= (b.gap_px, b.position == "above")
+                drop.add(id(b) if keep_a else id(a))
+    for r in regions:
+        r.rules = [rm for rm in r.rules if id(rm) not in drop]
+
+
+def _overlaps(bbox: tuple[float, float, float, float],
+              others: list[tuple[float, float, float, float]]) -> tuple[float, float]:
+    """Quantos px do topo e da base de `bbox` também estão no bbox de um bloco vizinho da mesma coluna
+    (o dots às vezes sobrepõe os bboxes de blocos seguidos em ~15 px; a probe decide de quem é a linha
+    que cai nessa faixa)."""
+    x1, y1, x2, y2 = bbox
+    top = bottom = 0.0
+    for ox1, oy1, ox2, oy2 in others:
+        if min(x2, ox2) - max(x1, ox1) < 0.5 * min(x2 - x1, ox2 - ox1):
+            continue   # outra coluna
+        if oy1 < y1 < oy2 < y2:
+            top = max(top, oy2 - y1)
+        if y1 < oy1 < y2 < oy2:
+            bottom = max(bottom, y2 - oy1)
+    return top, bottom
+
+
+def _by_page(evidence: dict[tuple[int, int], BlockEvidence]) -> dict[int, list[BlockEvidence]]:
+    out: dict[int, list[BlockEvidence]] = {}
+    for (page, _), ev in evidence.items():
+        out.setdefault(page, []).append(ev)
+    return out
+
+
+def _usable(entry: tuple[str, list[bool] | None] | None, ev: BlockEvidence) -> bool:
+    """A marca do cache vale se foi dada para estes tokens (None = resposta rejeitada pelo marker)."""
+    if entry is None or entry[0] != tokens_key(ev.tokens):
+        return False
+    return entry[1] is None or len(entry[1]) == len(ev.tokens)
+
+
+def _crop(image: Image.Image, bbox: tuple[float, float, float, float]) -> Image.Image:
+    x1, y1, x2, y2 = (int(v) for v in bbox)
+    return image.crop((max(0, x1 - _CROP_PAD), max(0, y1 - _CROP_PAD),
+                       min(image.width, x2 + _CROP_PAD), min(image.height, y2 + _CROP_PAD)))

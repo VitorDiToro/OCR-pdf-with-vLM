@@ -6,8 +6,13 @@ import statistics
 from html import escape
 from importlib.resources import files
 
-from ..model import Block, Document, Note, Span
+from ..model import Block, Document, Note, Rule, Span
 from .math import math_img
+
+# tamanho e margens dos títulos em style.css (em do próprio título); o filete colado a um
+# título leva a margem dele daquele lado, para o espaço até o bloco vizinho não mudar
+_HEADING_EM = {1: 1.6, 2: 1.25, 3: 1.1}
+_HEADING_MARGIN_EM = {"top": 1.1, "bottom": 0.45}
 
 FONT_STACKS = {
     "serif": '"Liberation Serif", "Times New Roman", "DejaVu Serif", serif',
@@ -62,13 +67,13 @@ class _HtmlRenderer:
         size = b.style.font_size_pt or self.doc.body_font_pt
         if b.kind in ("title", "heading"):
             tag = "h1" if b.kind == "title" else f"h{min(6, max(2, b.level))}"
-            inner = f"<{tag}{style}>{self._spans(b.spans, size)}</{tag}>"
+            ruled = " ".join(c for c, r in (("rule-above", b.style.rule_above), ("rule-below", b.style.rule_below)) if r)
+            cls = f' class="{ruled}"' if ruled else ""
+            inner = f"<{tag}{cls}{style}>{self._spans(b.spans, size)}</{tag}>"
         elif b.kind == "paragraph":
-            inner = f"<p{style}>{self._spans(b.spans, size)}{self._trailing(b)}</p>"
-            return inner
+            return self._ruled(b, f"<p{style}>{self._spans(b.spans, size)}{self._trailing(b)}</p>")
         elif b.kind == "list_item":
-            inner = f'<p class="li"{style}>{self._spans(b.spans, size)}{self._trailing(b)}</p>'
-            return inner
+            return self._ruled(b, f'<p class="li"{style}>{self._spans(b.spans, size)}{self._trailing(b)}</p>')
         elif b.kind == "caption":
             inner = f'<p class="caption"{style}>{self._spans(b.spans, size)}</p>'
         elif b.kind == "table":
@@ -83,7 +88,30 @@ class _HtmlRenderer:
         else:
             inner = f"<p{style}>{self._spans(b.spans, size)}</p>"
         trailing = self._trailing(b)
-        return inner + (f'<div class="fn-anchor">{trailing}</div>' if trailing else "")
+        return self._ruled(b, inner) + (f'<div class="fn-anchor">{trailing}</div>' if trailing else "")
+
+    def _ruled(self, b: Block, html: str) -> str:
+        """Filetes como elementos próprios antes/depois do bloco: a caixa do bloco não muda."""
+        above = self._rule(b, b.style.rule_above, "above") if b.style.rule_above else ""
+        below = self._rule(b, b.style.rule_below, "below") if b.style.rule_below else ""
+        return above + html + below
+
+    def _rule(self, b: Block, rule: Rule, position: str) -> str:
+        # o div tem o em do corpo (left_em é medido nele); a folga medida é a margem do lado do
+        # bloco e, num título (margem zerada pela classe rule-*), a margem dele passa para o outro lado
+        near, far = ("top", "bottom") if position == "below" else ("bottom", "top")
+        css = (f"margin-left:{rule.left_em:g}em;margin-right:{rule.right_frac * 100:.1f}%;"
+               f"border-top:{rule.thickness_pt:g}pt solid;margin-{near}:{rule.gap_pt:g}pt")
+        if b.kind in ("title", "heading"):
+            css += f";margin-{far}:{self._heading_margin_pt(b, far):.2f}pt"
+        return f'<div class="rule {position}" style="{css}"></div>'
+
+    def _heading_margin_pt(self, b: Block, side: str) -> float:
+        level = 1 if b.kind == "title" else min(6, max(2, b.level))
+        if side == "top" and level == 1:
+            return 0.0                                  # h1 { margin-top: 0 }
+        size = b.style.font_size_pt or self.doc.body_font_pt * _HEADING_EM.get(level, 1.0)
+        return _HEADING_MARGIN_EM[side] * size
 
     def _style_attr(self, b: Block) -> str:
         css = []

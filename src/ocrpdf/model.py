@@ -28,11 +28,23 @@ class Span:
 
 
 @dataclass
+class Rule:
+    """Filete colado a um bloco, relativo à área de texto (independe do tamanho da página)."""
+
+    thickness_pt: float
+    gap_pt: float          # folga entre o texto e o filete
+    left_em: float         # início do filete − esquerda da área de texto, em em do corpo
+    right_frac: float      # (direita da área − fim do filete) / largura da área, 0–1
+
+
+@dataclass
 class BlockStyle:
     align: str = "justify"            # justify | left | center | right
     indent_em: float = 0.0            # recuo da primeira linha
     font_size_pt: float | None = None
     full_width: bool = True           # False: bloco pertence a uma coluna
+    rule_above: Rule | None = None    # filete colado acima do bloco
+    rule_below: Rule | None = None    # filete colado abaixo do bloco
 
 
 @dataclass
@@ -121,7 +133,10 @@ def _build(cls: type, data: dict[str, Any]) -> Any:
 def _block_from_dict(d: dict[str, Any]) -> Block:
     block = _build(Block, d)
     block.spans = [_build(Span, s) for s in d.get("spans", [])]
-    block.style = _build(BlockStyle, d.get("style", {}))
+    style = d.get("style", {})
+    block.style = _build(BlockStyle, style)
+    block.style.rule_above = _build(Rule, style["rule_above"]) if style.get("rule_above") else None
+    block.style.rule_below = _build(Rule, style["rule_below"]) if style.get("rule_below") else None
     src = d.get("source", {})
     block.source = Source(page=src.get("page", 0), bbox=tuple(src.get("bbox", (0, 0, 0, 0))))
     return block

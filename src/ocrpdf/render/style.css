@@ -13,6 +13,7 @@
 }
 
 body {
+  margin: 0;   /* as margens são as da @page; o padrão do navegador (8px) somaria 6pt a elas */
   font-size: var(--body-size);
   line-height: var(--line-height);
   hyphens: manual;
@@ -34,6 +35,13 @@ h1 { font-size: 1.6em; margin-top: 0; }
 h2 { font-size: 1.25em; }
 h3 { font-size: 1.1em; }
 h4, h5, h6 { font-size: 1em; }
+/* tamanhos e margens dos títulos repetidos em html.py (_HEADING_EM, _HEADING_MARGIN_EM) */
+
+/* filete colado a um título: div.rule logo antes/depois dele, com a folga medida entre os dois */
+.rule-above { margin-top: 0; }
+.rule-below { margin-bottom: 0; }
+.rule.above { break-after: avoid; }
+.rule.below { break-before: avoid; break-after: avoid; }
 
 sup, sub { font-size: 0.65em; line-height: 0; }
 sup { vertical-align: super; }

@@ -28,12 +28,25 @@ class LineMetrics:
 
 
 @dataclass
+class RuleMetrics:
+    """Filete horizontal colado a um bloco (sublinhado de título), em pixels da página."""
+
+    position: str            # above | below
+    x1_px: float
+    x2_px: float
+    y_px: float              # centro do filete
+    thickness_px: float
+    gap_px: float            # distância entre o filete e a tinta do texto do bloco
+
+
+@dataclass
 class Region:
     category: str
     bbox: tuple[float, float, float, float]   # pixels da imagem da página
     text: str = ""
     metrics: LineMetrics | None = None
     image: str = ""                            # recorte salvo (figuras)
+    rules: list[RuleMetrics] = field(default_factory=list)   # filetes colados (títulos)
 
 
 @dataclass
@@ -58,7 +71,8 @@ class PageLayout:
         regions = []
         for r in d.pop("regions"):
             m = r.pop("metrics", None)
-            regions.append(Region(**r, metrics=LineMetrics(**m) if m else None))
+            rules = [RuleMetrics(**x) for x in r.pop("rules", [])]
+            regions.append(Region(**r, metrics=LineMetrics(**m) if m else None, rules=rules))
         return cls(**d, regions=regions)
 
 
@@ -67,6 +81,6 @@ class OcrEngine(Protocol):
         """Devolve as regiões da página em ordem de leitura, com bbox em pixels de `image`."""
         ...
 
-    def ask(self, image: Image.Image, question: str) -> str:
+    def ask(self, image: Image.Image, question: str, max_tokens: int = 128) -> str:
         """Pergunta livre sobre a imagem (usada para classificar a fonte)."""
         ...

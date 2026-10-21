@@ -28,6 +28,7 @@ publicado em `exemplo/resultado.pdf`.
 | Conteúdo | texto, títulos, notas, **múltiplas colunas, tabelas, figuras, fórmulas** | o usuário marcou todos |
 | Fórmulas | LaTeX → SVG com **ziamath** (WeasyPrint não roda JS/MathJax nem renderiza MathML) | puro Python |
 | vLLM | ambiente **separado** via `uvx` (scripts/serve_vllm.sh), não dependência do projeto | torch/CUDA pesados; a app só faz HTTP |
+| Itálico | por palavra: **inclinação medida na imagem** decide (≥ 7°); sem medida, vale o dots (`--italic-rule slant`). 2º modelo só opcional (`r1`/`r2`) | o 2º modelo quase não marca itálico; `slant` atinge precisão ≥ 90% e supera dots e referência nos 3 documentos (docs/superpowers/reports/2026-10-21-italico-avaliacao.md) |
 
 ## Uso
 
@@ -39,29 +40,44 @@ uv run pytest                         # testes
 uv run ocrpdf convert in.pdf -o out.pdf -v       # OCR + montagem + PDF
 uv run ocrpdf analyze in.pdf -w work/            # só OCR + document.json
 uv run ocrpdf render work/document.json -o out.pdf   # re-renderiza após editar o JSON
+uv run python scripts/eval_italic.py --pdf in.pdf --work work --gold gabarito.json --pages pares
 ```
 
 Opções relevantes: `--preset dots|qwen25vl|qwen3vl`, `--server`, `--model`, `--dpi 200`,
 `--pages "1-3,7"`, `--workers 4`, `--font auto|serif|sans|mono|<família>`, `--lang pt-BR`,
 `--force` (ignora cache), `--no-header`.
+Itálico (etapa 2): `--italic-rule slant` (padrão, só o servidor do OCR) | `r1`/`r2` (2º modelo,
+servidor em :8001: `scripts/serve_pair.sh`, ou `--switch restart` para a app subir/derrubar cada
+servidor; `--italic-server`, `--italic-model`, `--italic-hf-model`); `--no-italic` = itálico do OCR
+sem conferir na imagem.
+Formato de saída (`convert` e `render`; só na renderização, o `document.json` fica no original):
+`--page-size original|a4|<L>x<A>` (cm, aceita vírgula), `--margin 2.5` (cm; só com tamanho
+diferente de `original`), `--font-size PT` (escala corpo, títulos, notas e cabeçalho). Em `--margin`
+e `--font-size` o decimal é com **ponto** (decisão do usuário; está na ajuda).
 
-Pasta de trabalho (padrão `<saída>_work/`): `pages/page_NNNN.json` (cache bruto por página),
-`assets/` (recortes de figuras), `meta.json` (fonte detectada), `document.json`, `document.html`.
+Pasta de trabalho (padrão `<saída>_work/`): `pages/page_NNNN.json` (por página: OCR em cache +
+medidas da probe regravadas a cada execução), `assets/` (recortes de figuras), `meta.json` (fonte
+detectada), `italic/page_NNNN.json` (marcas do 2º modelo, só r1/r2), `document.json`, `document.html`.
 
 ## Arquitetura
 
 ```
 src/ocrpdf/
-  cli.py          argparse: convert | analyze | render
+  cli.py          argparse: convert | analyze | render (+ --page-size/--margin/--font-size,
+                  validados antes do OCR)
   pipeline.py     Pipeline: rasteriza (pypdfium2, em série, lotes de workers*2) → engine.analyze
-                  em ThreadPool → probe/recorte → cache por página → assemble → document.json.
+                  em ThreadPool (só páginas sem cache) → probe/filetes/recortes de todas as páginas
+                  (medidas sempre recalculadas da imagem) → assemble → document.json.
                   Também pergunta ao VLM se a fonte é serif/sans (--font auto).
-  ocr/base.py     Region(category, bbox px, text, metrics, image), LineMetrics, PageLayout
-                  (save/load JSON), Protocol OcrEngine { analyze(image), ask(image, q) }
+  ocr/base.py     Region(category, bbox px, text, metrics, image, rules), LineMetrics,
+                  RuleMetrics (filete em px), PageLayout (save/load JSON),
+                  Protocol OcrEngine { analyze(image), ask(image, q) }
   ocr/vlm.py      VlmEngine (httpx → /chat/completions), PRESETS, smart_resize, parse_layout
                   (tira cercas ```json, recupera objetos de JSON truncado), reescala bbox.
-  probe.py        heurísticas numpy sobre a imagem do bloco: Otsu, perfil de projeção →
-                  nº de linhas, entrelinha, ascent (topo→linha de base), recuo 1ª linha, alinhamento.
+  probe.py        heurísticas numpy sobre a imagem do bloco: Otsu, bloco endireitado (straighten,
+                  skew_deg), perfil de projeção → nº de linhas, entrelinha, ascent (topo→linha de
+                  base), recuo 1ª linha, alinhamento; find_rules: filetes colados acima/abaixo de
+                  títulos (o VLM não os reporta).
   inline.py       Markdown inline → list[Span] (markdown-it-py + dollarmath): *it*, **b**, <sup>,
                   <sub>, $^{1}$ → sup, $…$ → math, ¹²³ → sup; escapa "1." e "-" iniciais para
                   não virarem lista.
@@ -70,9 +86,18 @@ src/ocrpdf/
   assemble.py     PageLayout[] → Document: margens, tipografia, nº de colunas, cabeçalho corrente,
                   blocos, junção de parágrafos entre páginas/colunas, notas, níveis de título.
   htmlsafe.py     sanitiza HTML de tabelas (só tags de tabela + colspan/rowspan).
-  model.py        Document/Block/Span/Note/BlockStyle/Source/PageGeometry + save/load tolerante.
+  model.py        Document/Block/Span/Note/BlockStyle/Rule/Source/PageGeometry + save/load tolerante.
+  output_format.py  --page-size/--margin/--font-size: cópia ajustada do Document só para renderizar
+                  (o document.json guarda o formato original medido).
   render/html.py  Document → HTML+CSS; render/style.css (base); render/math.py (ziamath);
   render/__init__  render_pdf() com WeasyPrint (import tardio).
+  italic/         etapa 2, itálico por palavra: words (tokens dos Spans), slant (caixas de palavra
+                  e inclinação, com o bloco endireitado), align (tokens ↔ caixas), stage (evidência
+                  por bloco e regras slant/r1/r2), marker (2º modelo), evaluate (gabarito/referência).
+  servers.py      só r1/r2: SleepSwitcher (par no ar, /sleep e /wake_up) e RestartSwitcher (a app
+                  sobe cada servidor com serve_vllm.sh); ITALIC_HF_MODEL, ITALIC_SERVER_ENV.
+scripts/          serve_vllm.sh (um servidor; GPU_MEM pela VRAM livre; MAX_IMAGE_PX p/ Qwen3-VL),
+                  serve_pair.sh (par dots + 2º modelo), eval_italic.py (precisão/cobertura).
 ```
 
 ### Modelo intermediário (`model.py`)
@@ -82,6 +107,8 @@ src/ocrpdf/
 - `Block.kind`: title | heading | paragraph | list_item | caption | table | formula | figure | endnote.
   `endnote` é um marcador de posição (`note=id`); o conteúdo fica em `doc.notes`.
   `trailing_notes`: notas de rodapé sem chamada, ancoradas no último bloco da página de origem.
+- `BlockStyle`: align, indent_em, font_size_pt, full_width, rule_above/rule_below (`Rule`:
+  thickness_pt, gap_pt, left_em no em do corpo, right_frac relativo à área de texto).
 - `Span`: text + italic/bold/sup/sub/math + `note` (id quando é chamada de nota).
 - `Note`: id ("n1"...), label ("1", "*", "a"...), kind footnote|endnote, page, blocks.
 
@@ -102,13 +129,34 @@ src/ocrpdf/
 - **Tamanho de fonte** = ascent_px / 0,72 (altura de maiúsculas/ascendentes por em). Medir pela
   altura total da tinta subestimava títulos sem descendentes ("Primeira Versão"). Filetes
   (altura ≤ 4 px e > 50% da largura) são descartados antes.
+- **Página torta** (~1° é comum): `probe.measure` endireita o bloco antes de separar as linhas
+  (cisalhamento vertical pelo ângulo que mais concentra a projeção horizontal) e desconta o
+  deslocamento horizontal da margem linha a linha. Sem isso, as linhas de um bloco largo se
+  encostavam e o bloco virava uma "linha" de ~1000 px (fonte de 95–376 pt; Horkheimer com 1613
+  páginas).
+- **bbox sobreposto** (o dots às vezes sobe/desce ~15 px na linha do bloco vizinho): o pipeline
+  passa à probe quantos px do topo/base também estão no bbox de um vizinho da mesma coluna
+  (`pipeline._overlaps`); a 1ª/última linha cuja tinta, no recorte original, fica toda nessa faixa
+  (menor que uma linha) é a do vizinho e não conta. Medir no recorte original, não no endireitado,
+  é o que funciona em página torta; e sem vizinho sobreposto nada é descartado ("anos." fica).
 - Corpo = mediana ponderada por linhas dos blocos `text` com ≥ 3 linhas; entrelinha = pitch/font.
 - Espaço entre parágrafos = mediana das lacunas − entrelinha extra.
 - Margens: mediana das extremidades do conteúdo; a inferior usa o 1º quartil (páginas cheias).
 - Colunas: mediana de largura dos blocos de texto / largura útil < 0,6 → 2 ou 3 colunas;
   blocos com largura > 70% são `full_width` (fora do `div.cols`).
 - Alinhamento: multilinhas → probe; linha única → posição relativa à área útil da página
-  (centro/direita/esquerda + recuo em em).
+  (centro/direita/esquerda + recuo em em). Linha única que começa numa **posição recorrente**
+  (≥ 2 outros blocos: recuo de 1ª linha de parágrafos, subtítulos) é `left` mesmo se parecer
+  simétrica; blocos simétricos não contam como apoio ("I", "II", "III" centralizados).
+  Títulos gravam sempre `font_size_pt` (o recuo fica no em do próprio título).
+- Filetes (`probe.find_rules`, só title/section-header): grupo de ≤ 4 linhas de pixels numa faixa
+  acima/abaixo do bbox, com o trecho de maior sobreposição com o bbox (≥ 50% da largura),
+  comprimento ≥ 10% da página e ≥ 3× a altura da linha, e ≥ 1 linha em branco até a tinta
+  (exclui serifas). `Rule` guarda extensão relativa à área de texto (`left_em` no em do corpo,
+  `right_frac`); o render desenha um `div.rule` próprio antes/depois do título. Filete achado por
+  dois títulos vizinhos (abaixo de um, acima do outro) fica com o mais perto
+  (`pipeline._drop_shared_rules`). Bloco de coluna (`full_width=False`) não leva filete: a geometria
+  é da área da página e ele é desenhado dentro de `div.cols` (TODO: geometria por coluna).
 - Títulos: níveis por faixas de tamanho (diferenças < 1 pt = mesmo nível); title = h1.
 - Parágrafo continua da página/coluna anterior se o anterior não termina em pontuação final
   **ou** o novo começa com minúscula, e o novo não tem recuo de 1ª linha; desfaz hifenização.
@@ -135,10 +183,17 @@ src/ocrpdf/
     `tests/test_render.py` tem um documento sintético para cada caso e controles sem cada correção.
   - Seletores de margin box separados por vírgula (`@top-left, @top-right {…}`) invalidam a regra.
   - Margin boxes herdam do elemento raiz, não do `body`: `font-family` vai no `html`.
+  - O `body` tem margem padrão de 8px (6pt) somada às margens da `@page`: `style.css` zera.
   - `background-size` de gradiente é ignorado no `@footnote` (pinta a área toda de preto).
 - Fonte (`--font auto`): pergunta ao VLM sobre recortes em resolução cheia do maior bloco de
-  texto de 3 páginas e vence a maioria. Com a página reduzida o dots erra; ele raciocina antes de
-  responder (termina em `\boxed{sans}`), por isso `ask` usa 128 tokens e vale a última menção.
+  texto de 5 páginas e vence a maioria. A pergunta descreve as serifas ("small strokes at the
+  ends…, like Times New Roman, or plain like Arial"): a original errava em livros serifados.
+  Com a página reduzida o dots erra; ele raciocina antes de responder (termina em `\boxed{sans}`),
+  por isso `ask` usa 128 tokens e vale a última menção.
+- Itálico (`slant`): caixas de palavra pelas lacunas entre tintas, casadas com os tokens do OCR
+  (bloco sem casamento ≥ `MATCH_MIN` fica sem medida); inclinação = cisalhamento que endireita as
+  hastes, menos a da linha de base. Só os blocos em que a regra muda alguma palavra recebem as
+  flags; os demais mantêm os spans do OCR (itálico parcial "*Aura*s" preservado).
 - Cabeçalho corrente: alinhamento pela folga até as margens (o centro engana com texto longo);
   tamanho medido pela probe (`page-header`/`page-footer` estão em `_MEASURED`).
 
@@ -165,30 +220,48 @@ Feito e conferido:
 - Resultado comparado com o original: 14 páginas, quebras quase iguais, notas na página da
   chamada, fonte sans, cabeçalho à direita.
 - `tests/test_render.py` (pytest): notas na página da chamada + controle que reproduz o defeito
-  do WeasyPrint sem o patch.
+  do WeasyPrint sem o patch. Também há testes de alinhamento/filete do título (`test_assemble.py`,
+  `test_rules.py`), cache e medidas (`test_pipeline.py`) e formato de saída (`test_output_format.py`);
+  `tests/synth.py` gera a página sintética estilo Benjamin e o `FakeEngine`.
 - `inline.parse` e `probe.measure` conferidos manualmente.
+- **Itálico por palavra** (2026-10-21): avaliado contra gabaritos à mão em 3 documentos (Benjamin;
+  Althusser e Horkheimer em `/home/vitor/Amostras`, com conversões de referência de outras
+  ferramentas; gabaritos e caches deles em `amostras/`, fora do git). Páginas pares, precisão /
+  cobertura da regra `slant`: Benjamin 99,4/89,2 (dots 100/46,1); Althusser 97,6/100 (dots
+  100/97,5; referência 92,5/92,5); Horkheimer 98,6/92,2 (dots 99,3/90,8; referência 98,2/71,2).
+  O 2º modelo (Qwen3-VL 8B-AWQ e 4B-FP8) quase não marca: R1 0,5–60% de cobertura.
+- **Livros reais** (2026-10-21, Althusser e Horkheimer, páginas ~1° tortas): depois da correção da
+  probe, Althusser (`--pages 5-10`) sai com 6 páginas para 6 escaneadas, mesmas quebras de linha
+  quase todas; Horkheimer (`--pages 5-49`) com 44 para 45. Fonte serifada detectada nos dois.
+  Comparações lado a lado em `amostras/comparacao/` (fora do git).
+- **VRAM e desktop**: com dois servidores no ar (dots dormindo + 2º modelo), sobram ~0,5 GiB para a
+  interface; numa execução assim o gnome-shell caiu e encerrou a sessão (servidores e Claude Code
+  juntos). Só com um servidor, sem problema.
 
 Ainda não exercitado: ziamath inline, colunas, tabelas, figuras, presets `qwen25vl`/`qwen3vl`.
 
 ## Próximos passos
 
-1. **Título** (p. 1): no original é alinhado à esquerda com o mesmo recuo dos subtítulos
-   (x ≈ 251 px); saiu centralizado (bbox quase simétrico na área útil). O filete sob o título
-   (dentro do bbox do title) não é reproduzido.
-2. **Itálico**: o dots marca só parte. Marcou as frases longas da p. 1, *A idéia do cinema*,
-   *sui generis*, *cella*; perdeu o subtítulo "Texto de Walter Benjamin…", "Em busca do ouro",
-   "Sonho de uma noite de verão", a citação de Séverin-Mars (p. 6). Comparar com
-   `--preset qwen3vl` (~12 GB: apertado nesta GPU) ou um modo híbrido (layout do dots +
-   re-reconhecimento do texto dos blocos por um VLM genérico).
-3. **Testes** restantes: `test_inline.py`, `test_notes.py` (split_label, link por página,
+1. Pendências da verificação de ponta a ponta (detalhes em
+   docs/superpowers/reports/2026-10-21-italico-avaliacao.md):
+   - Capa/logotipo (Althusser p. 1 e 3): haste de letra decorativa atravessa as linhas e o título
+     sai com 376 pt. Limite de plausibilidade (fonte × largura do bbox × nº de caracteres).
+   - `meta.json` sem versão da pergunta da fonte: mudar a pergunta não invalida o cache.
+   - `probe.find_rules` não endireita o bloco (filete em página torta). A inclinação segue por
+     bloco, não por página (decidido na revisão do PR #1: acompanha a curvatura perto da lombada).
+   - Limiares da inclinação em pixels (`slant_deg` exige ≥ 30 px de tinta; tudo medido a 200 dpi:
+     em 100–150 dpi há menos medidas) e calibração em só 3 documentos em português. Testar um 4º
+     documento (corpo ≤ 9 pt, ou itálico oblíquo sintético) antes de confiar na regra fora disso.
+   - Herança de palavra curta na regra `slant` (revisão do PR #1): Benjamin pares 89,2 → 98,4 de
+     cobertura, mas a precisão do Horkheimer cai para 96,6 (< 98,2 da referência). Não adotada.
+2. **Testes** restantes: `test_inline.py`, `test_notes.py` (split_label, link por página,
    endnotes, `[n]`, `*`), `test_vlm.py` com `httpx.MockTransport` (cerca, JSON truncado, escala
    pixels/norm1000), `test_assemble.py` com PageLayouts sintéticos (cabeçalho corrente, junção
    "Por mais" | "penetrantes que fossem", nota ligada ao título).
-4. Escrever o `README.md` (está vazio).
-5. Pendências menores conhecidas:
+3. Escrever o `README.md` (está vazio).
+4. Pendências menores conhecidas:
    - `inline.parse(strip_list_marker=...)` não é usado; remover ou usar em list-items.
    - `font_size_pt` por nota é ignorado em parte (o render usa a mediana das notas).
    - Notas longas que quebram de página: avaliar `footnote-policy` no CSS.
    - Chamadas `(1)` não são reconhecidas de propósito (ambíguas com enumerações).
    - Com `-v`, os logs INFO do WeasyPrint ("Step 5 - Creating layout…") e do httpx poluem a saída.
-   - Caches `pages/*.json` anteriores a 2026-10-20 não têm medidas do cabeçalho (use `--force`).
