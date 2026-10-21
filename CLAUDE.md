@@ -48,23 +48,28 @@ Formato de saída (`convert` e `render`; só na renderização, o `document.json
 `--page-size original|a4|<L>x<A>` (cm, aceita vírgula), `--margin 2.5` (cm; só com tamanho
 diferente de `original`), `--font-size PT` (escala corpo, títulos, notas e cabeçalho).
 
-Pasta de trabalho (padrão `<saída>_work/`): `pages/page_NNNN.json` (cache bruto por página),
-`assets/` (recortes de figuras), `meta.json` (fonte detectada), `document.json`, `document.html`.
+Pasta de trabalho (padrão `<saída>_work/`): `pages/page_NNNN.json` (por página: OCR em cache +
+medidas da probe regravadas a cada execução), `assets/` (recortes de figuras), `meta.json` (fonte
+detectada), `document.json`, `document.html`.
 
 ## Arquitetura
 
 ```
 src/ocrpdf/
-  cli.py          argparse: convert | analyze | render
+  cli.py          argparse: convert | analyze | render (+ --page-size/--margin/--font-size,
+                  validados antes do OCR)
   pipeline.py     Pipeline: rasteriza (pypdfium2, em série, lotes de workers*2) → engine.analyze
-                  em ThreadPool → probe/recorte → cache por página → assemble → document.json.
+                  em ThreadPool (só páginas sem cache) → probe/filetes/recortes de todas as páginas
+                  (medidas sempre recalculadas da imagem) → assemble → document.json.
                   Também pergunta ao VLM se a fonte é serif/sans (--font auto).
-  ocr/base.py     Region(category, bbox px, text, metrics, image), LineMetrics, PageLayout
-                  (save/load JSON), Protocol OcrEngine { analyze(image), ask(image, q) }
+  ocr/base.py     Region(category, bbox px, text, metrics, image, rules), LineMetrics,
+                  RuleMetrics (filete em px), PageLayout (save/load JSON),
+                  Protocol OcrEngine { analyze(image), ask(image, q) }
   ocr/vlm.py      VlmEngine (httpx → /chat/completions), PRESETS, smart_resize, parse_layout
                   (tira cercas ```json, recupera objetos de JSON truncado), reescala bbox.
   probe.py        heurísticas numpy sobre a imagem do bloco: Otsu, perfil de projeção →
-                  nº de linhas, entrelinha, ascent (topo→linha de base), recuo 1ª linha, alinhamento.
+                  nº de linhas, entrelinha, ascent (topo→linha de base), recuo 1ª linha, alinhamento;
+                  find_rules: filetes colados acima/abaixo de títulos (o VLM não os reporta).
   inline.py       Markdown inline → list[Span] (markdown-it-py + dollarmath): *it*, **b**, <sup>,
                   <sub>, $^{1}$ → sup, $…$ → math, ¹²³ → sup; escapa "1." e "-" iniciais para
                   não virarem lista.
@@ -73,7 +78,9 @@ src/ocrpdf/
   assemble.py     PageLayout[] → Document: margens, tipografia, nº de colunas, cabeçalho corrente,
                   blocos, junção de parágrafos entre páginas/colunas, notas, níveis de título.
   htmlsafe.py     sanitiza HTML de tabelas (só tags de tabela + colspan/rowspan).
-  model.py        Document/Block/Span/Note/BlockStyle/Source/PageGeometry + save/load tolerante.
+  model.py        Document/Block/Span/Note/BlockStyle/Rule/Source/PageGeometry + save/load tolerante.
+  output_format.py  --page-size/--margin/--font-size: cópia ajustada do Document só para renderizar
+                  (o document.json guarda o formato original medido).
   render/html.py  Document → HTML+CSS; render/style.css (base); render/math.py (ziamath);
   render/__init__  render_pdf() com WeasyPrint (import tardio).
 ```
@@ -85,6 +92,8 @@ src/ocrpdf/
 - `Block.kind`: title | heading | paragraph | list_item | caption | table | formula | figure | endnote.
   `endnote` é um marcador de posição (`note=id`); o conteúdo fica em `doc.notes`.
   `trailing_notes`: notas de rodapé sem chamada, ancoradas no último bloco da página de origem.
+- `BlockStyle`: align, indent_em, font_size_pt, full_width, rule_above/rule_below (`Rule`:
+  thickness_pt, gap_pt, left_em no em do corpo, right_frac relativo à área de texto).
 - `Span`: text + italic/bold/sup/sub/math + `note` (id quando é chamada de nota).
 - `Note`: id ("n1"...), label ("1", "*", "a"...), kind footnote|endnote, page, blocks.
 
@@ -111,7 +120,15 @@ src/ocrpdf/
 - Colunas: mediana de largura dos blocos de texto / largura útil < 0,6 → 2 ou 3 colunas;
   blocos com largura > 70% são `full_width` (fora do `div.cols`).
 - Alinhamento: multilinhas → probe; linha única → posição relativa à área útil da página
-  (centro/direita/esquerda + recuo em em).
+  (centro/direita/esquerda + recuo em em). Linha única que começa numa **posição recorrente**
+  (≥ 2 outros blocos: recuo de 1ª linha de parágrafos, subtítulos) é `left` mesmo se parecer
+  simétrica; blocos simétricos não contam como apoio ("I", "II", "III" centralizados).
+  Títulos gravam sempre `font_size_pt` (o recuo fica no em do próprio título).
+- Filetes (`probe.find_rules`, só title/section-header): grupo de ≤ 4 linhas de pixels numa faixa
+  acima/abaixo do bbox, com o trecho de maior sobreposição com o bbox (≥ 50% da largura),
+  comprimento ≥ 10% da página e ≥ 3× a altura da linha, e ≥ 1 linha em branco até a tinta
+  (exclui serifas). `Rule` guarda extensão relativa à área de texto (`left_em` no em do corpo,
+  `right_frac`); o render desenha um `div.rule` próprio antes/depois do título.
 - Títulos: níveis por faixas de tamanho (diferenças < 1 pt = mesmo nível); title = h1.
 - Parágrafo continua da página/coluna anterior se o anterior não termina em pontuação final
   **ou** o novo começa com minúscula, e o novo não tem recuo de 1ª linha; desfaz hifenização.
@@ -138,6 +155,7 @@ src/ocrpdf/
     `tests/test_render.py` tem um documento sintético para cada caso e controles sem cada correção.
   - Seletores de margin box separados por vírgula (`@top-left, @top-right {…}`) invalidam a regra.
   - Margin boxes herdam do elemento raiz, não do `body`: `font-family` vai no `html`.
+  - O `body` tem margem padrão de 8px (6pt) somada às margens da `@page`: `style.css` zera.
   - `background-size` de gradiente é ignorado no `@footnote` (pinta a área toda de preto).
 - Fonte (`--font auto`): pergunta ao VLM sobre recortes em resolução cheia do maior bloco de
   texto de 3 páginas e vence a maioria. Com a página reduzida o dots erra; ele raciocina antes de
@@ -168,30 +186,28 @@ Feito e conferido:
 - Resultado comparado com o original: 14 páginas, quebras quase iguais, notas na página da
   chamada, fonte sans, cabeçalho à direita.
 - `tests/test_render.py` (pytest): notas na página da chamada + controle que reproduz o defeito
-  do WeasyPrint sem o patch.
+  do WeasyPrint sem o patch. Também há testes de alinhamento/filete do título (`test_assemble.py`,
+  `test_rules.py`), cache e medidas (`test_pipeline.py`) e formato de saída (`test_output_format.py`);
+  `tests/synth.py` gera a página sintética estilo Benjamin e o `FakeEngine`.
 - `inline.parse` e `probe.measure` conferidos manualmente.
 
 Ainda não exercitado: ziamath inline, colunas, tabelas, figuras, presets `qwen25vl`/`qwen3vl`.
 
 ## Próximos passos
 
-1. **Título** (p. 1): no original é alinhado à esquerda com o mesmo recuo dos subtítulos
-   (x ≈ 251 px); saiu centralizado (bbox quase simétrico na área útil). O filete sob o título
-   (dentro do bbox do title) não é reproduzido.
-2. **Itálico**: o dots marca só parte. Marcou as frases longas da p. 1, *A idéia do cinema*,
+1. **Itálico**: o dots marca só parte. Marcou as frases longas da p. 1, *A idéia do cinema*,
    *sui generis*, *cella*; perdeu o subtítulo "Texto de Walter Benjamin…", "Em busca do ouro",
    "Sonho de uma noite de verão", a citação de Séverin-Mars (p. 6). Comparar com
    `--preset qwen3vl` (~12 GB: apertado nesta GPU) ou um modo híbrido (layout do dots +
    re-reconhecimento do texto dos blocos por um VLM genérico).
-3. **Testes** restantes: `test_inline.py`, `test_notes.py` (split_label, link por página,
+2. **Testes** restantes: `test_inline.py`, `test_notes.py` (split_label, link por página,
    endnotes, `[n]`, `*`), `test_vlm.py` com `httpx.MockTransport` (cerca, JSON truncado, escala
    pixels/norm1000), `test_assemble.py` com PageLayouts sintéticos (cabeçalho corrente, junção
    "Por mais" | "penetrantes que fossem", nota ligada ao título).
-4. Escrever o `README.md` (está vazio).
-5. Pendências menores conhecidas:
+3. Escrever o `README.md` (está vazio).
+4. Pendências menores conhecidas:
    - `inline.parse(strip_list_marker=...)` não é usado; remover ou usar em list-items.
    - `font_size_pt` por nota é ignorado em parte (o render usa a mediana das notas).
    - Notas longas que quebram de página: avaliar `footnote-policy` no CSS.
    - Chamadas `(1)` não são reconhecidas de propósito (ambíguas com enumerações).
    - Com `-v`, os logs INFO do WeasyPrint ("Step 5 - Creating layout…") e do httpx poluem a saída.
-   - Caches `pages/*.json` anteriores a 2026-10-20 não têm medidas do cabeçalho (use `--force`).
