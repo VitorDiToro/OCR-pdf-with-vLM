@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import threading
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -22,23 +23,30 @@ def make_pdf(path: Path, images: list[Image.Image], dpi: int = 200) -> Path:
 
 
 class FakeEngine:
-    """OcrEngine de mentira: devolve respostas pré-definidas e conta as chamadas a `analyze`."""
+    """OcrEngine de mentira: devolve respostas pré-definidas e conta as chamadas a `analyze`.
+
+    As respostas são servidas na ordem das chamadas (a última se repete), não por página: o
+    engine não recebe o índice da página. Com várias páginas, use `workers=1` no Pipeline.
+    """
 
     def __init__(self, responses: list[list[Region]], answers: list[str] | None = None) -> None:
         self.responses = responses
         self.answers = answers or []
         self.calls = 0
         self._asked = 0
+        self._lock = threading.Lock()   # o Pipeline chama `analyze` de várias threads
 
     def analyze(self, image: Image.Image) -> list[Region]:
-        out = copy.deepcopy(self.responses[min(self.calls, len(self.responses) - 1)])
-        self.calls += 1
-        return out
+        with self._lock:
+            k = self.calls
+            self.calls += 1
+        return copy.deepcopy(self.responses[min(k, len(self.responses) - 1)])
 
     def ask(self, image: Image.Image, question: str, max_tokens: int = 128) -> str:
-        answer = self.answers[self._asked] if self._asked < len(self.answers) else "sans"
-        self._asked += 1
-        return answer
+        with self._lock:
+            k = self._asked
+            self._asked += 1
+        return self.answers[k] if k < len(self.answers) else "sans"
 
 
 def _justified_line(draw: ImageDraw.ImageDraw, font: ImageFont.FreeTypeFont, words: list[str],
@@ -53,9 +61,12 @@ def _justified_line(draw: ImageDraw.ImageDraw, font: ImageFont.FreeTypeFont, wor
 
 
 def _paragraph(draw: ImageDraw.ImageDraw, font: ImageFont.FreeTypeFont, top: int, seed: int,
-               lines: int = 5, pitch: int = 31, left: int = 151, right: int = 1547, indent: int = 98) -> int:
-    """Parágrafo justificado de `lines` linhas com recuo na 1ª; devolve o fim (y) do bloco."""
+               lines: int = 5, pitch: int = 31, left: int = 151, right: int = 1547,
+               indent: int = 98) -> tuple[int, str]:
+    """Parágrafo justificado de `lines` linhas com recuo na 1ª; devolve o fim (y) do bloco e o
+    texto desenhado (a última linha, curta, leva só metade das palavras que caberiam)."""
     k = seed
+    drawn: list[str] = []
     for n in range(lines):
         start = left + (indent if n == 0 else 0)
         words: list[str] = []
@@ -66,10 +77,12 @@ def _paragraph(draw: ImageDraw.ImageDraw, font: ImageFont.FreeTypeFont, top: int
             words, k = cand, k + 1
         y = top + n * pitch
         if n == lines - 1:
-            draw.text((start, y), " ".join(words[: max(2, len(words) // 2)]), font=font, fill=0)
+            words = words[: max(2, len(words) // 2)]
+            draw.text((start, y), " ".join(words), font=font, fill=0)
         else:
             _justified_line(draw, font, words, start, right, y)
-    return top + lines * pitch - 1
+        drawn.extend(words)
+    return top + lines * pitch - 1, " ".join(drawn)
 
 
 def benjamin_like_page() -> tuple[Image.Image, list[Region]]:
@@ -83,13 +96,13 @@ def benjamin_like_page() -> tuple[Image.Image, list[Region]]:
     sub = "(Primeira versão, tradução de teste)"
     d.text((251, 257), sub, font=reg, fill=0)
     d.text((251, 342), "Primeira Versão", font=reg, fill=0)
-    end1 = _paragraph(d, reg, 398, seed=0)
-    end2 = _paragraph(d, reg, 574, seed=7)
+    end1, text1 = _paragraph(d, reg, 398, seed=0)
+    end2, text2 = _paragraph(d, reg, 574, seed=7)
     regions = [
         Region("title", (251, 157, 1395, 209), title),
         Region("text", (251, 257, 938, 288), sub),
         Region("section-header", (251, 342, 517, 368), "Primeira Versão"),
-        Region("text", (151, 398, 1547, end1), "Primeiro parágrafo do ensaio, com cinco linhas de texto."),
-        Region("text", (151, 574, 1547, end2), "Segundo parágrafo do ensaio, com cinco linhas de texto."),
+        Region("text", (151, 398, 1547, end1), text1),
+        Region("text", (151, 574, 1547, end2), text2),
     ]
     return img, regions
