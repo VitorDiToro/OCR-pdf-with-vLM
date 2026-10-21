@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import statistics
 from collections import Counter
@@ -9,8 +10,11 @@ from dataclasses import replace
 
 from . import inline, notes
 from .htmlsafe import sanitize_table
+from .italic.words import apply_flags
 from .model import Block, BlockStyle, Document, Note, PageGeometry, Rule, Source, Span
 from .ocr.base import PageLayout, Region
+
+log = logging.getLogger(__name__)
 
 _ASCENT_PER_EM = 0.72  # altura das maiúsculas/ascendentes por em (Arial 0,72; Times 0,68)
 _TERMINAL = re.compile(r"[.!?:;…\"”»)\]]\s*$")
@@ -22,14 +26,17 @@ _NOTE_LINE = re.compile(
 )
 
 
-def assemble(pages: list[PageLayout], source: str = "", font_family: str = "serif") -> Document:
+def assemble(pages: list[PageLayout], source: str = "", font_family: str = "serif",
+             italic: dict[tuple[int, int], list[bool]] | None = None) -> Document:
+    """`italic`: itálico final por token de cada região, chave `(índice da página, índice da região)`
+    (etapa 2); regiões sem entrada ficam com o itálico do OCR."""
     pages = sorted(pages, key=lambda p: p.index)
     geom, content = _page_geometry(pages)
     doc = Document(source=source, page=geom, font_family=font_family)
     _measure_typography(doc, pages)
     doc.columns = _column_count(pages, content)
     _running_header(doc, pages)
-    _Builder(doc, content).run(pages)
+    _Builder(doc, content, italic or {}).run(pages)
     _assign_heading_levels(doc)
     notes.link(doc)
     return doc
@@ -219,9 +226,11 @@ def inline_text(markdown: str) -> str:
 # --- blocos ----------------------------------------------------------------
 
 class _Builder:
-    def __init__(self, doc: Document, content: dict[int, tuple[float, float]]) -> None:
+    def __init__(self, doc: Document, content: dict[int, tuple[float, float]],
+                 italic: dict[tuple[int, int], list[bool]]) -> None:
         self.doc = doc
         self.content = content
+        self.italic = italic
         self.in_endnotes = False
         self.last_note: Note | None = None
         self.prev_body_region: tuple[PageLayout, Region] | None = None
@@ -230,10 +239,10 @@ class _Builder:
     def run(self, pages: list[PageLayout]) -> None:
         self.left_stops = _left_positions(pages, self.content, self.doc.body_font_pt)
         for page in pages:
-            for region in page.regions:
-                self._region(page, region)
+            for n, region in enumerate(page.regions):
+                self._region(page, region, (page.index, n))
 
-    def _region(self, page: PageLayout, r: Region) -> None:
+    def _region(self, page: PageLayout, r: Region, key: tuple[int, int]) -> None:
         cat = r.category
         if cat in ("page-header", "page-footer"):
             return
@@ -241,11 +250,11 @@ class _Builder:
         style = self._style(page, r)
 
         if cat == "footnote":
-            self._notes(r.text, "footnote", page.index, src, style)
+            self._notes(r.text, "footnote", page.index, src, style, key)
             return
         if cat in ("title", "section-header"):
             text = r.text
-            spans = inline.parse_flat(text)
+            spans = self._italicize(key, [inline.parse_flat(text)])[0]
             if not spans:
                 return
             self.in_endnotes = bool(notes.ENDNOTE_HEADINGS.match("".join(s.text for s in spans)))
@@ -255,10 +264,10 @@ class _Builder:
             block.style.align = style.align if style.align != "justify" else "left"
             self._append(block)
             return
-        if cat in ("text", "list-item") and self.in_endnotes and self._notes(r.text, "endnote", page.index, src, style):
+        if cat in ("text", "list-item") and self.in_endnotes and self._notes(r.text, "endnote", page.index, src, style, key):
             return
         if cat == "text":
-            for i, spans in enumerate(inline.parse(r.text)):
+            for i, spans in enumerate(self._italicize(key, inline.parse(r.text))):
                 block = Block(kind="paragraph", spans=spans, style=replace(style) if i else style, source=src)
                 if i == 0 and self._continues_previous(page, r, block):
                     continue
@@ -266,11 +275,11 @@ class _Builder:
             self.prev_body_region = (page, r)
             return
         if cat == "list-item":
-            spans = inline.parse_flat(r.text)
+            spans = self._italicize(key, [inline.parse_flat(r.text)])[0]
             if spans:
                 self._append(Block(kind="list_item", spans=spans, style=style, source=src))
         elif cat == "caption":
-            spans = inline.parse_flat(r.text)
+            spans = self._italicize(key, [inline.parse_flat(r.text)])[0]
             if spans:
                 style.align = "center" if style.align == "justify" and r.metrics and r.metrics.lines == 1 else style.align
                 self._append(Block(kind="caption", spans=spans, style=style, source=src))
@@ -290,6 +299,27 @@ class _Builder:
         self.doc.blocks.append(block)
         if block.kind not in ("paragraph",):
             self.prev_body_region = None
+
+    def _italicize(self, key: tuple[int, int], pieces: list[list[Span]]) -> list[list[Span]]:
+        """Aplica o itálico final da região (etapa 2) aos seus pedaços (parágrafos, notas), em
+        ordem, com um cursor de tokens. Se os tokens não baterem com as marcas, avisa e mantém o
+        itálico do OCR."""
+        marks = self.italic.get(key)
+        if marks is None:
+            return pieces
+        out, pos = [], 0
+        try:
+            for spans in pieces:
+                spans, pos = apply_flags(spans, marks, pos)
+                out.append(spans)
+            fits = pos == len(marks)
+        except ValueError:   # menos marcas que tokens
+            fits = False
+        if not fits:
+            log.warning("página %d, região %d: %d marcas de itálico não batem com os tokens do texto; "
+                        "mantido o itálico do OCR", key[0] + 1, key[1], len(marks))
+            return pieces
+        return out
 
     # -- estilo
 
@@ -373,11 +403,13 @@ class _Builder:
 
     # -- notas
 
-    def _notes(self, markdown: str, kind: str, page: int, src: Source, style: BlockStyle) -> bool:
+    def _notes(self, markdown: str, kind: str, page: int, src: Source, style: BlockStyle,
+               key: tuple[int, int]) -> bool:
         """Cria notas a partir de uma região. Devolve False se nada foi tratado como nota."""
         handled = False
-        for chunk in _split_note_lines(markdown):
-            spans = inline.parse_flat(chunk)
+        # o itálico vem antes de separar o rótulo: o rótulo ("¹") também é um token das marcas
+        chunks = self._italicize(key, [inline.parse_flat(c) for c in _split_note_lines(markdown)])
+        for spans in chunks:
             if not spans:
                 continue
             label, rest = notes.split_label(spans)

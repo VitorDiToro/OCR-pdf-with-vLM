@@ -38,6 +38,11 @@ class FakeEngine:
         self._asked = 0
         self._lock = threading.Lock()   # o Pipeline chama `analyze` de várias threads
 
+    @property
+    def asked(self) -> int:
+        """Chamadas a `ask` (pergunta da fonte, marcação de itálico)."""
+        return self._asked
+
     def analyze(self, image: Image.Image) -> list[Region]:
         with self._lock:
             k = self.calls
