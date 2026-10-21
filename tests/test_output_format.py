@@ -4,10 +4,12 @@ from pathlib import Path
 import pytest
 from pypdf import PdfReader
 
+from ocrpdf import cli
 from ocrpdf.cli import main
 from ocrpdf.model import Block, Document, Rule, Span
 from ocrpdf.output_format import apply_output_format, parse_page_size
 from ocrpdf.render import render_pdf
+from synth import FakeEngine, benjamin_like_page, make_pdf
 from test_render import _doc_with_many_notes, _misplaced
 
 
@@ -81,3 +83,26 @@ def test_cli_render_rejects_bad_page_size(tmp_path, capsys):
         main(["render", str(src), "-o", str(tmp_path / "x.pdf"), "--page-size", "4x10"])
     assert e.value.code == 2
     assert "tamanho de página fora do intervalo" in capsys.readouterr().err
+
+
+def _exit_code(argv: list[str]) -> int:
+    """Código de saída, venha do retorno de main ou do argparse (SystemExit)."""
+    try:
+        return main(argv)
+    except SystemExit as e:
+        return e.code
+
+
+@pytest.mark.parametrize("opts,message", [
+    (["--font-size", "0"], "o tamanho da fonte deve ser positivo"),
+    (["--font-size", "doze"], "tamanho de fonte inválido: doze"),
+    (["--page-size", "6x6", "--margin", "2.5"], "margem de 2.5 cm deixa menos de 3 cm de área de texto"),
+])
+def test_cli_convert_rejects_bad_format_before_ocr(tmp_path, monkeypatch, capsys, opts, message):
+    image, regions = benjamin_like_page()
+    engine = FakeEngine([regions])
+    monkeypatch.setattr(cli, "VlmEngine", lambda **kw: engine)
+    pdf = make_pdf(tmp_path / "in.pdf", [image])
+    assert _exit_code(["convert", str(pdf), "-o", str(tmp_path / "out.pdf"), *opts]) == 2
+    assert engine.calls == 0                       # nem chegou ao OCR
+    assert message in capsys.readouterr().err

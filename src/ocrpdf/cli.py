@@ -72,7 +72,7 @@ def _add_format_options(p: argparse.ArgumentParser) -> None:
                    help="original (padrão) | a4 | <largura>x<altura> em cm, ex.: 17,6x25")
     p.add_argument("--margin", type=float, default=2.5,
                    help="margens em cm (padrão 2,5); só vale quando --page-size não é original")
-    p.add_argument("--font-size", type=float, default=None, metavar="PT",
+    p.add_argument("--font-size", type=_font_size_arg, default=None, metavar="PT",
                    help="tamanho do corpo em pt; títulos, notas e cabeçalho escalam junto (padrão: o medido)")
 
 
@@ -82,6 +82,16 @@ def _page_size_arg(spec: str):
         return parse_page_size(spec)
     except ValueError as e:
         raise argparse.ArgumentTypeError(str(e)) from None
+
+
+def _font_size_arg(spec: str) -> float:
+    try:
+        value = float(spec)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"tamanho de fonte inválido: {spec}") from None
+    if value <= 0:
+        raise argparse.ArgumentTypeError("o tamanho da fonte deve ser positivo")
+    return value
 
 
 def _formatted(args, doc: Document) -> Document | None:
@@ -108,6 +118,9 @@ def _run_analysis(args, work: Path) -> Document:
 
 def _convert(args) -> int:
     output = args.output or args.input.with_name(args.input.stem + "_ocr.pdf")
+    # erros de formato (margem grande demais para a página) aparecem antes do OCR, que é demorado
+    if _formatted(args, Document()) is None:
+        return 2
     work = _work_dir(args, output)
     doc = _run_analysis(args, work)
     if args.no_header:
