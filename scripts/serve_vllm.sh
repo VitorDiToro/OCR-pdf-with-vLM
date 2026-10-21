@@ -7,11 +7,23 @@
 # Uso: scripts/serve_vllm.sh [modelo] [porta]
 #   modelo padrão: rednote-hilab/dots.mocr (~3B; cabe em GPUs de 8 GB)
 #   alternativa : Qwen/Qwen3-VL-8B-Instruct-FP8 (precisa de ~12 GB; use --preset qwen3vl)
+# Variáveis: GPU_MEM (fração da VRAM), MAX_LEN, MAX_SEQS, VLLM_VERSION.
 set -euo pipefail
 
 MODEL="${1:-rednote-hilab/dots.mocr}"
 PORT="${2:-8000}"
 VLLM_VERSION="${VLLM_VERSION:-0.17.1}"
+
+# O vLLM exige que a fração GPU_MEM da VRAM esteja livre na partida. Num desktop, Xorg,
+# gnome-shell e navegador já ocupam ~1 GB, e um 0,90 fixo falha. Sem GPU_MEM, usa a memória
+# livre agora menos 512 MiB de folga (no máximo 0,90).
+if [[ -z "${GPU_MEM:-}" ]]; then
+    read -r FREE TOTAL < <(nvidia-smi --query-gpu=memory.free,memory.total \
+        --format=csv,noheader,nounits | head -1 | tr -d ',')
+    GPU_MEM=$(LC_ALL=C awk -v f="$FREE" -v t="$TOTAL" \
+        'BEGIN { u = (f - 512) / t; if (u > 0.90) u = 0.90; printf "%.2f", int(u * 100) / 100 }')
+    echo "GPU_MEM=${GPU_MEM} (livre: ${FREE} de ${TOTAL} MiB)" >&2
+fi
 
 # Contexto de 16k tokens: uma página em ~200 dpi gera ~4-5k tokens de imagem + a resposta.
 # Em GPUs de 8 GB, se faltar memória, reduza para 12288 ou baixe o --dpi do ocrpdf.
@@ -20,6 +32,6 @@ exec uvx --python 3.12 --from "vllm==${VLLM_VERSION}" vllm serve "${MODEL}" \
     --served-model-name model \
     --trust-remote-code \
     --chat-template-content-format string \
-    --gpu-memory-utilization "${GPU_MEM:-0.90}" \
+    --gpu-memory-utilization "${GPU_MEM}" \
     --max-model-len "${MAX_LEN:-16384}" \
     --max-num-seqs "${MAX_SEQS:-4}"
