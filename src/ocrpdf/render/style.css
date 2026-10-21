@@ -1,11 +1,12 @@
 /* Estilo base; tamanhos e espaçamentos medidos no original chegam via variáveis em :root. */
 
 @page {
-  @top-left, @top-center, @top-right { font-size: calc(var(--body-size) * 0.85); vertical-align: middle; }
-  @bottom-center { font-size: calc(var(--body-size) * 0.85); }
+  /* tamanho das margin boxes vem do html.py; o WeasyPrint descarta seletores de margin box
+     separados por vírgula ("@top-left, @top-right { ... }"), então nada de agrupá-los aqui */
   @footnote {
-    /* filete curto acima das notas, como na maioria dos livros */
-    background: linear-gradient(currentColor, currentColor) no-repeat top left / 33% 0.5pt;
+    /* filete curto acima das notas, como na maioria dos livros; em SVG porque o WeasyPrint
+       ignora background-size de gradientes aqui e pinta a área inteira de preto */
+    background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" width="10" height="1"><rect width="10" height="1"/></svg>') no-repeat 0 0 / 33% 0.5pt;
     padding-top: 4pt;
     margin-top: 8pt;
   }

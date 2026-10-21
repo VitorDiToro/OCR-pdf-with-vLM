@@ -94,6 +94,7 @@ class Document:
     columns: int = 1
     running_header: str = ""
     running_header_align: str = "center"
+    running_header_font_pt: float | None = None   # None: 0,85 × corpo
     header_on_first_page: bool = True
     lang: str = ""
     page_numbers: bool = False

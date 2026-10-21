@@ -167,12 +167,14 @@ class _HtmlRenderer:
         d = self.doc
         g = d.page
         family = FONT_STACKS.get(d.font_family, f'"{d.font_family}", serif')
+        # margin boxes herdam do elemento raiz, não do body: a família vai no html
+        small = round(d.body_font_pt * 0.85, 1)
         header = ""
         if d.running_header:
             content = '"' + d.running_header.replace("\\", "\\\\").replace('"', '\\"') + '"'
             box = {"left": "top-left", "right": "top-right"}.get(d.running_header_align, "top-center")
-            header = f"@{box} {{ content: {content}; }}"
-        numbers = "@bottom-center { content: counter(page); }" if d.page_numbers else ""
+            header = f"@{box} {{ content: {content}; font-size: {d.running_header_font_pt or small}pt; }}"
+        numbers = f"@bottom-center {{ content: counter(page); font-size: {small}pt; }}" if d.page_numbers else ""
         first = "" if d.header_on_first_page or not header else (
             "@page :first { @top-left { content: none } @top-center { content: none } @top-right { content: none } }"
         )
@@ -183,5 +185,5 @@ class _HtmlRenderer:
             f"{header} {numbers} }}\n{first}\n"
             f":root {{ --body-size: {d.body_font_pt}pt; --line-height: {d.line_height}; "
             f"--par-gap: {d.paragraph_gap_pt}pt; --note-size: {self._footnote_size()}pt; }}\n"
-            f"body {{ font-family: {family}; }}\n" + base
+            f"html {{ font-family: {family}; }}\n" + base
         )

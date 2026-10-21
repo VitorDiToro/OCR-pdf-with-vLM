@@ -109,11 +109,13 @@ class VlmEngine:
             sx, sy = image.width / w, image.height / h
         return [_scale(r, sx, sy, image.size) for r in parse_layout(raw)]
 
-    def ask(self, image: Image.Image, question: str) -> str:
-        thumb = image.copy()
-        thumb.thumbnail((1024, 1024))
-        h, w = smart_resize(thumb.height, thumb.width, self._preset.factor, self._preset.min_pixels, 1_048_576)
-        return self._chat(thumb.resize((w, h)), question, max_tokens=16).strip()
+    def ask(self, image: Image.Image, question: str, max_tokens: int = 128) -> str:
+        # sem miniatura: detalhes como serifas somem na imagem reduzida; o dots raciocina
+        # antes de responder, por isso a folga de tokens
+        p = self._preset
+        h, w = smart_resize(image.height, image.width, p.factor, p.min_pixels, 2_000_000)
+        sent = image if (w, h) == image.size else image.resize((w, h), Image.LANCZOS)
+        return self._chat(sent, question, max_tokens=max_tokens).strip()
 
     def _chat(self, image: Image.Image, prompt: str, max_tokens: int) -> str:
         buf = io.BytesIO()

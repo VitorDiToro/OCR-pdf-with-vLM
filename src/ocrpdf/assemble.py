@@ -132,6 +132,7 @@ def _column_count(pages: list[PageLayout], content: dict[int, tuple[float, float
 def _running_header(doc: Document, pages: list[PageLayout]) -> None:
     texts: Counter[str] = Counter()
     align: dict[str, str] = {}
+    sizes: dict[str, list[float]] = {}
     for p in pages:
         for r in p.regions:
             if r.category == "page-footer" and _PAGE_NUMBER.match(inline_text(r.text)):
@@ -148,8 +149,9 @@ def _running_header(doc: Document, pages: list[PageLayout]) -> None:
             if not stripped:
                 continue
             texts[stripped] += 1
-            cx = (r.bbox[0] + r.bbox[2]) / 2 / p.width_px
-            align[stripped] = "center" if 0.4 < cx < 0.6 else ("right" if cx >= 0.6 else "left")
+            align[stripped] = _header_align(doc.page, _bbox_pt(r, p))
+            if fpx := _font_px(r):
+                sizes.setdefault(stripped, []).append(fpx * p.px_to_pt)
     if not texts:
         return
     text, count = texts.most_common(1)[0]
@@ -157,6 +159,17 @@ def _running_header(doc: Document, pages: list[PageLayout]) -> None:
         doc.running_header = text
         doc.running_header_align = align[text]
         doc.header_on_first_page = any(r.category == "page-header" for r in pages[0].regions)
+        if text in sizes:
+            doc.running_header_font_pt = round(statistics.median(sizes[text]) * 2) / 2
+
+
+def _header_align(g: PageGeometry, bbox: tuple[float, float, float, float]) -> str:
+    """Pela folga até cada margem: o centro do bloco engana quando o texto é longo."""
+    left = bbox[0] - g.margin_left_pt
+    right = g.width_pt - g.margin_right_pt - bbox[2]
+    if abs(left - right) < 0.04 * (g.width_pt - g.margin_left_pt - g.margin_right_pt):
+        return "center"
+    return "right" if right < left else "left"
 
 
 def inline_text(markdown: str) -> str:

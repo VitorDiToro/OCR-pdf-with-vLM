@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -13,15 +15,21 @@ from PIL import Image
 from . import probe
 from .assemble import assemble
 from .model import Document
-from .ocr.base import OcrEngine, PageLayout
+from .ocr.base import OcrEngine, PageLayout, Region
 
 log = logging.getLogger(__name__)
 
-_MEASURED = {"text", "title", "section-header", "list-item", "caption", "footnote"}
+_MEASURED = {"text", "title", "section-header", "list-item", "caption", "footnote", "page-header", "page-footer"}
 _FONT_QUESTION = (
     "Look at the main body text of this page. Is its typeface serif or sans-serif? "
     "Answer with exactly one word: serif or sans."
 )
+_FONT_SAMPLES = 3  # blocos de texto (de páginas diferentes) consultados; vence a maioria
+_TYPEFACE = re.compile(r"sans(?:[- ]serif)?|serif", re.I)
+
+
+def _area(r: Region) -> float:
+    return (r.bbox[2] - r.bbox[0]) * (r.bbox[3] - r.bbox[1])
 
 
 def parse_page_range(spec: str | None, total: int) -> list[int]:
@@ -64,7 +72,7 @@ class Pipeline:
             pdf.close()
 
         layouts = [PageLayout.load(self._cache(i)) for i in indices]
-        family = self._font_family(pdf_path, layouts, font)
+        family = self._font_family(pdf_path, layouts, font, force)
         doc = assemble(layouts, source=pdf_path.name, font_family=family)
         doc.lang = lang
         doc.save(self.work / "document.json")
@@ -97,27 +105,44 @@ class Pipeline:
         layout.save(self._cache(index))
         return layout
 
-    def _font_family(self, pdf_path: Path, layouts: list[PageLayout], font: str) -> str:
+    def _font_family(self, pdf_path: Path, layouts: list[PageLayout], font: str, force: bool) -> str:
         if font != "auto":
             return font
         meta_path = self.work / "meta.json"
         meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
-        if "font_family" not in meta:
+        if force or "font_family" not in meta:
             meta["font_family"] = self._ask_font(pdf_path, layouts)
             meta_path.write_text(json.dumps(meta))
         return meta["font_family"]
 
     def _ask_font(self, pdf_path: Path, layouts: list[PageLayout]) -> str:
-        # página com mais texto corrido, para a pergunta ter o que olhar
-        best = max(layouts, key=lambda p: sum(len(r.text) for r in p.regions if r.category == "text"))
+        # Recortes em resolução cheia do maior bloco de texto das páginas com mais texto:
+        # com a página inteira reduzida o modelo não enxerga as serifas.
+        samples = []
+        for p in layouts:
+            texts = [r for r in p.regions if r.category == "text"]
+            if texts:
+                samples.append((max(texts, key=_area), p))
+        samples.sort(key=lambda s: _area(s[0]), reverse=True)
+
+        votes: Counter[str] = Counter()
         pdf = pdfium.PdfDocument(str(pdf_path))
         try:
-            image, _, _ = self._rasterize(pdf, best.index)
+            for region, layout in samples[:_FONT_SAMPLES]:
+                image, _, _ = self._rasterize(pdf, layout.index)
+                k = image.width / layout.width_px  # o cache pode ter vindo de outro --dpi
+                x1, y1, x2, y2 = (v * k for v in region.bbox)
+                crop = image.crop((int(x1), int(y1), int(x2), int(min(y2, y1 + 0.2 * image.height))))
+                try:
+                    answer = self.engine.ask(crop, _FONT_QUESTION)
+                except Exception as exc:  # pergunta auxiliar: não deve derrubar a conversão
+                    log.warning("não foi possível classificar a fonte (%s)", exc)
+                    continue
+                if found := _TYPEFACE.findall(answer):
+                    # vale a última classificação citada ("...is sans-serif. \boxed{sans}")
+                    votes["sans" if found[-1].lower().startswith("sans") else "serif"] += 1
         finally:
             pdf.close()
-        try:
-            answer = self.engine.ask(image, _FONT_QUESTION).lower()
-        except Exception as exc:  # pergunta auxiliar: não deve derrubar a conversão
-            log.warning("não foi possível classificar a fonte (%s); usando serif", exc)
-            return "serif"
-        return "sans" if "sans" in answer else "serif"
+        family = "sans" if votes["sans"] > votes["serif"] else "serif"
+        log.info("fonte do corpo: %s (votos: %s)", family, dict(votes) or "nenhum; padrão serif")
+        return family

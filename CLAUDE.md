@@ -33,7 +33,8 @@ uma nota de rodapé (¹) no título "Primeira Versão". **Não está no reposit�
 ```bash
 ./scripts/install_system_deps.sh      # apt: pango/harfbuzz, fontes Liberation; instala uv
 uv sync
-./scripts/serve_vllm.sh               # terminal 1 (dots.mocr em :8000, served-model-name "model")
+./scripts/serve_vllm.sh               # terminal 1 (dots.mocr em :8000, served-model-name "model"; ~3 min p/ subir)
+uv run pytest                         # testes
 uv run ocrpdf convert in.pdf -o out.pdf -v       # OCR + montagem + PDF
 uv run ocrpdf analyze in.pdf -w work/            # só OCR + document.json
 uv run ocrpdf render work/document.json -o out.pdf   # re-renderiza após editar o JSON
@@ -121,7 +122,20 @@ src/ocrpdf/
   chamada `<a class="noteref" id="ref-nX" href="#nX">`; `::footnote-call`/`::footnote-marker`
   com `content: none` para manter o rótulo original; o rótulo dentro da nota linka de volta para
   `#ref-nX`. Isso foi **validado** no WeasyPrint 70 (links /Link com destinos nomeados corretos).
-  Filete curto acima das notas via `linear-gradient` no `@footnote`.
+  Filete curto acima das notas: SVG em data-URI como `background` do `@footnote`.
+- **Peculiaridades do WeasyPrint 70** (conferidas em 2026-10-20):
+  - Para respeitar `orphans`/`widows`, ele adia notas já colocadas para a página seguinte
+    (ignora `footnote-policy`; em cascata a nota vai várias páginas adiante). `render/__init__.py`
+    recompila `_linebox_layout` trocando a linha `report = …` por `report = False` (se a linha
+    mudar numa versão futura, só avisa). `tests/test_render.py` cobre o patch e o defeito.
+  - Seletores de margin box separados por vírgula (`@top-left, @top-right {…}`) invalidam a regra.
+  - Margin boxes herdam do elemento raiz, não do `body`: `font-family` vai no `html`.
+  - `background-size` de gradiente é ignorado no `@footnote` (pinta a área toda de preto).
+- Fonte (`--font auto`): pergunta ao VLM sobre recortes em resolução cheia do maior bloco de
+  texto de 3 páginas e vence a maioria. Com a página reduzida o dots erra; ele raciocina antes de
+  responder (termina em `\boxed{sans}`), por isso `ask` usa 128 tokens e vale a última menção.
+- Cabeçalho corrente: alinhamento pela folga até as margens (o centro engana com texto longo);
+  tamanho medido pela probe (`page-header`/`page-footer` estão em `_MEASURED`).
 
 ### Medições de referência (página 1 do Benjamin, 200 dpi → 1700×2200 px)
 Blocos (px): título [254,165,1546,213] (inclui sublinhado); subtítulo itálico [262,257,938,288];
@@ -134,42 +148,42 @@ títulos ≈ 13–13,5 pt; título principal ≈ 17 pt; nota ≈ 8 pt.
 
 ## Estado atual
 
-Feito e conferido:
-- Todos os módulos importam; `uv run ocrpdf --help` funciona; `uv.lock` gerado.
-- `inline.parse` testado manualmente (itálico, negrito, sup, $^{2}$, ¹², math inline/bloco).
-- `probe.measure` conferido em blocos reais da página 1 (números acima).
-- Mecanismo de notas/links do WeasyPrint validado num HTML isolado.
+Repositório: github.com/VitorDiToro/OCR-pdf-with-vLM (público; `*.pdf` fora do git, exceto
+`tests/**/*.pdf`). PDF de referência local em `sample/sample.pdf`.
 
-**Nunca executado** (fazer primeiro):
-- Pipeline de ponta a ponta; `assemble` com dados reais; render de um documento completo.
-- `VlmEngine` contra um servidor real (o ambiente anterior não tinha GPU e o Hugging Face estava
-  bloqueado). Formato da saída, prefixo e escala de bbox vêm da documentação/código do dots.
-- ziamath inline (alinhamento vertical pela viewBox), agrupamento em colunas, tabelas, figuras.
+Feito e conferido:
+- **Execução real** (2026-10-20): dots.mocr no vLLM 0.17.1, RTX 3060 12 GB (o desktop ocupa
+  ~1,2 GB; `serve_vllm.sh` calcula `GPU_MEM` pela VRAM livre). 14 páginas em ~4 min com
+  `--workers 4`; sobram só ~0,46 GiB de KV cache (~17k tokens, ≈ 2 páginas em paralelo).
+- Saída do dots confere com o esperado (bbox em pixels da imagem enviada, prefixo `<|img|>…`).
+  Texto fiel: os erros na citação em francês da p. 6 ("exprinient", "peiisée") estão no original.
+- Resultado comparado com o original: 14 páginas, quebras quase iguais, notas na página da
+  chamada, fonte sans, cabeçalho à direita.
+- `tests/test_render.py` (pytest): notas na página da chamada + controle que reproduz o defeito
+  do WeasyPrint sem o patch.
+- `inline.parse` e `probe.measure` conferidos manualmente.
+
+Ainda não exercitado: ziamath inline, colunas, tabelas, figuras, presets `qwen25vl`/`qwen3vl`.
 
 ## Próximos passos
 
-1. **Testes** (`tests/`, pytest; `pypdf` já está no grupo dev):
-   - `test_inline.py`, `test_notes.py` (split_label, link por página, endnotes, `[n]`, `*`).
-   - `test_vlm.py` com `httpx.MockTransport`: JSON com cerca, JSON truncado, escala de bbox
-     (pixels e norm1000).
-   - `test_assemble.py` com PageLayouts sintéticos: cabeçalho corrente, junção de parágrafo
-     entre páginas ("Por mais" | "penetrantes que fossem"), nota de rodapé ligada ao título.
-   - `test_render.py`: gera PDF e verifica com pypdf texto extraível + anotações /Link com
-     destinos `nX` e `ref-nX`.
-2. **Demo com o PDF de referência**: um engine falso que devolve regiões transcritas das
-   páginas 1–3 (bboxes acima) para comparar visualmente o resultado com o original
-   (`pdftoppm -r 60`), sem depender da GPU.
-3. **Primeira execução real com GPU**: rodar `convert` no PDF de referência, inspecionar
-   `pages/*.json`. Verificar principalmente **se o dots.mocr marca itálico**; se não marcar,
-   comparar com `--preset qwen3vl` (Qwen3-VL-8B-Instruct-FP8, ~12 GB) e considerar um modo
-   híbrido (layout do dots + re-reconhecimento do texto dos blocos por um VLM genérico).
+1. **Título** (p. 1): no original é alinhado à esquerda com o mesmo recuo dos subtítulos
+   (x ≈ 251 px); saiu centralizado (bbox quase simétrico na área útil). O filete sob o título
+   (dentro do bbox do title) não é reproduzido.
+2. **Itálico**: o dots marca só parte. Marcou as frases longas da p. 1, *A idéia do cinema*,
+   *sui generis*, *cella*; perdeu o subtítulo "Texto de Walter Benjamin…", "Em busca do ouro",
+   "Sonho de uma noite de verão", a citação de Séverin-Mars (p. 6). Comparar com
+   `--preset qwen3vl` (~12 GB: apertado nesta GPU) ou um modo híbrido (layout do dots +
+   re-reconhecimento do texto dos blocos por um VLM genérico).
+3. **Testes** restantes: `test_inline.py`, `test_notes.py` (split_label, link por página,
+   endnotes, `[n]`, `*`), `test_vlm.py` com `httpx.MockTransport` (cerca, JSON truncado, escala
+   pixels/norm1000), `test_assemble.py` com PageLayouts sintéticos (cabeçalho corrente, junção
+   "Por mais" | "penetrantes que fossem", nota ligada ao título).
 4. Escrever o `README.md` (está vazio).
 5. Pendências menores conhecidas:
    - `inline.parse(strip_list_marker=...)` não é usado; remover ou usar em list-items.
    - `font_size_pt` por nota é ignorado em parte (o render usa a mediana das notas).
-   - `_ask_font` rasteriza a página de novo; o dots pode responder mal a perguntas livres
-     (há fallback para serif).
    - Notas longas que quebram de página: avaliar `footnote-policy` no CSS.
    - Chamadas `(1)` não são reconhecidas de propósito (ambíguas com enumerações).
-6. Git: o projeto ainda não é um repositório; `git init` + `.gitignore` (`.venv/`, `*_work/`,
-   `__pycache__/`).
+   - Com `-v`, os logs INFO do WeasyPrint ("Step 5 - Creating layout…") e do httpx poluem a saída.
+   - Caches `pages/*.json` anteriores a 2026-10-20 não têm medidas do cabeçalho (use `--force`).
