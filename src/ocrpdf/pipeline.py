@@ -11,7 +11,6 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-import httpx
 import numpy as np
 import pypdfium2 as pdfium
 from PIL import Image
@@ -91,9 +90,11 @@ class Pipeline:
             if self.italic:
                 evidence = self.collect_evidence(pdf_path, pages)
                 self._request_marks(pdf_path, evidence, force)
-                # só blocos com marcas do 2º modelo; os demais ficam com os spans do OCR, intactos
-                # (itálico parcial de palavra, como "*Aura*s", não cabe nas marcas por token)
-                italic = {key: fuse(ev, self.italic.rule) for key, ev in evidence.items() if ev.model is not None}
+                # só blocos com marcas do 2º modelo e alguma inclinação medida; os demais ficam com os
+                # spans do OCR, intactos (itálico parcial de palavra, como "*Aura*s", não cabe nas
+                # marcas por token; sem medida nenhuma, a fusão descartaria todo o itálico do dots)
+                italic = {key: fuse(ev, self.italic.rule) for key, ev in evidence.items()
+                          if ev.model is not None and any(s is not None for s in ev.slant)}
             else:
                 self._measure_pages(pdf_path, indices)
         finally:
@@ -210,8 +211,8 @@ class Pipeline:
                        force: bool) -> None:
         """Pede ao 2º modelo as marcas dos blocos suspeitos que faltam no cache e as grava.
 
-        Resposta rejeitada (texto alterado) vai para o cache como None e não é pedida de novo.
-        Falha de conexão não vai: as marcas já obtidas são gravadas e a execução para com erro.
+        Resposta recebida que altera o texto vai para o cache como None e não é pedida de novo.
+        Falha (ver `_Watched`) não vai: as marcas já obtidas são gravadas e a execução para com erro.
         """
         cfg = self.italic
         cached: dict[int, dict[int, tuple[str, list[bool] | None]]] = {}
@@ -247,10 +248,12 @@ class Pipeline:
                     for page in chunk:
                         save_marks(self._marks(page), cfg.model_id, cached[page])
                     if errors:
+                        e = errors[0]
                         raise RuntimeError(
-                            f"o 2º modelo não respondeu em {len(errors)} bloco(s) ({errors[0]}); as marcas "
-                            "obtidas foram gravadas e a próxima execução pede só as que faltam. Confira o "
-                            "servidor do itálico (modo sleep: suba o par com scripts/serve_pair.sh)")
+                            f"o 2º modelo ({cfg.model_id}) falhou em {len(errors)} bloco(s): "
+                            f"{type(e).__name__}: {e}. As marcas obtidas foram gravadas e a próxima "
+                            "execução pede só as que faltam. Confira o servidor e o nome do modelo "
+                            "(--italic-server, --italic-model; modo sleep: suba o par com scripts/serve_pair.sh)")
         finally:
             pdf.close()
 
@@ -299,17 +302,22 @@ class Pipeline:
 
 
 class _Watched:
-    """Engine do 2º modelo que guarda a falha de conexão de uma chamada: `mark_italics` devolve
-    None tanto para resposta rejeitada quanto para falha, e só a rejeitada pode ir para o cache."""
+    """Engine do 2º modelo que guarda a falha de uma chamada. `mark_italics` devolve None tanto para
+    resposta rejeitada quanto para falha; só a resposta recebida que altera o texto vai para o cache.
+    Falha é qualquer exceção do engine (conexão, 404 de modelo inexistente, 5xx, resposta malformada)
+    ou resposta que não é texto."""
 
     def __init__(self, engine: OcrEngine) -> None:
         self.engine = engine
-        self.error: httpx.TransportError | None = None
+        self.error: Exception | None = None
 
     def ask(self, image: Image.Image, question: str, max_tokens: int = 128) -> str:
         try:
-            return self.engine.ask(image, question, max_tokens=max_tokens)
-        except httpx.TransportError as exc:
+            answer = self.engine.ask(image, question, max_tokens=max_tokens)
+            if not isinstance(answer, str):
+                raise TypeError(f"resposta que não é texto ({type(answer).__name__})")
+            return answer
+        except Exception as exc:
             self.error = exc
             raise
 

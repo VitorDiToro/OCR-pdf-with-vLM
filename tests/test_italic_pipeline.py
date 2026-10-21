@@ -79,12 +79,35 @@ class FailingOn(RecordingSwitcher):
             raise RuntimeError("servidor vLLM inacessível; suba o par com scripts/serve_pair.sh")
 
 
-class DownEngine(FakeEngine):
-    """2º modelo cujo servidor caiu: toda chamada falha na conexão."""
+def _refused():
+    raise httpx.ConnectError("conexão recusada")
+
+
+def _model_not_found():
+    # --italic-model diferente do nome servido: o vLLM responde 404 (o VlmEngine repassa após as tentativas)
+    req = httpx.Request("POST", "http://127.0.0.1:8001/v1/chat/completions")
+    raise httpx.HTTPStatusError("Client error '404 Not Found'", request=req,
+                                response=httpx.Response(404, request=req))
+
+
+def _malformed():
+    raise KeyError("choices")
+
+
+def _not_text():
+    return {"choices": []}
+
+
+class BrokenEngine(FakeEngine):
+    """2º modelo que falha em toda chamada do jeito dado por `failure`."""
+
+    def __init__(self, failure) -> None:
+        super().__init__([])
+        self.failure = failure
 
     def ask(self, image, question, max_tokens=128):
         super().ask(image, question, max_tokens)
-        raise httpx.ConnectError("conexão recusada")
+        return self.failure()
 
 
 class CropRecorder(FakeEngine):
@@ -167,9 +190,12 @@ def test_italic_server_down_keeps_ocr_cache(tmp_path):
     assert r.ocr.calls == 0 and r.marker.asked == 1   # não refez o OCR; pediu as marcas
 
 
-def test_italic_server_falling_midway_is_an_error_and_not_cached(tmp_path):
-    with pytest.raises(RuntimeError, match="serve_pair.sh"):
-        run(tmp_path, marker=DownEngine([]))
+@pytest.mark.parametrize("failure,name", [(_refused, "ConnectError"), (_model_not_found, "HTTPStatusError"),
+                                          (_malformed, "KeyError"), (_not_text, "TypeError")])
+def test_marker_failure_is_an_error_and_not_cached(tmp_path, failure, name):
+    # só a resposta recebida que altera o texto vai para o cache; qualquer falha para a execução
+    with pytest.raises(RuntimeError, match=rf"modelo-falso.*{name}.*serve_pair.sh"):
+        run(tmp_path, marker=BrokenEngine(failure))
     r = run(tmp_path, answers=[mark(TOKS, {2, 3})])
     assert r.ocr.calls == 0 and r.marker.asked == 1   # a falha não foi para o cache
     assert doc_italics(r.doc) == {TOKS[2], TOKS[3]}
@@ -252,6 +278,25 @@ def test_blocks_without_model_marks_keep_ocr_spans(tmp_path, sent):
     (block,) = r.doc.blocks
     assert [(s.text, s.italic) for s in block.spans] == [
         ("Benjamin discute ", False), ("Aura", True), ("s perdidas na Pequena história recente", False)]
+
+
+def test_block_without_slant_evidence_keeps_ocr_spans(tmp_path):
+    # bbox numa área em branco: nenhuma palavra casa com a imagem e toda inclinação fica sem medida;
+    # mesmo com as marcas do 2º modelo iguais às do dots, a fusão descartaria todo o itálico
+    md = "Benjamin discute *Aura*s e *Pequena história* hoje"
+    spans = parse_flat(md)
+    toks, dots = tokens(spans), {i for i, f in enumerate(italic_flags(spans)) if f}
+    image, _ = page(("text", BODY, ""))
+    pdf = make_pdf(tmp_path / "in.pdf", [image])
+    marker = FakeEngine([], answers=[mark(toks, dots)])
+    pipeline = Pipeline(FakeEngine([[Region("text", (151, 600, 1547, 700), md)]]), tmp_path / "w",
+                        workers=1, italic=ItalicConfig(marker, "modelo-falso"))
+    doc = pipeline.analyze(pdf, font="sans")
+    ev = pipeline.collect_evidence(pdf)[(0, 0)]
+    assert marker.asked == 1 and ev.model == [i in dots for i in range(len(toks))]
+    assert all(s is None for s in ev.slant)
+    (block,) = doc.blocks
+    assert [(s.text, s.italic) for s in block.spans] == [(s.text, s.italic) for s in spans]
 
 
 def test_no_italic_never_calls_marker(tmp_path):
