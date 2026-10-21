@@ -63,21 +63,29 @@ def find_rules(mask: np.ndarray, bbox: tuple[float, float, float, float]) -> lis
     """Filetes horizontais colados ao bloco (acima ou abaixo), que o VLM não reporta.
 
     Procura em [y1 − banda, y2 + banda] grupos de linhas consecutivas (altura ≤ 4 px) com um
-    trecho contínuo de tinta de pelo menos metade da largura do bbox. O filete pode passar
-    do bbox (vai até a margem), por isso a linha é lida na largura inteira da página.
+    trecho contínuo de tinta que cubra ≥ metade da largura do bbox e meça ≥ 10% da página e
+    ≥ 3× a altura da linha de texto do bloco. O filete pode passar do bbox (vai até a margem),
+    por isso a linha é lida na largura inteira da página, mas vale o trecho de maior
+    sobreposição com o bbox (um traço noutra coluna não conta). O grupo também precisa estar
+    separado da tinta do texto por ≥ 1 linha em branco: serifas encostam na haste da letra.
     """
     x1, y1, x2, y2 = (int(round(v)) for v in bbox)
     h, w = mask.shape
     x1, x2, y1, y2 = max(x1, 0), min(x2, w), max(y1, 0), min(y2, h)
     if x2 - x1 < 8 or y2 <= y1:
         return []
+    block = mask[y1:y2, x1:x2]
+    lines = _line_spans(block)
+    if not lines:
+        return []
+    min_len = max(0.1 * w, 3 * float(np.median([b - a for a, b in lines])))
     band = max(10, round(0.6 * (y2 - y1)))
     top, bottom = max(0, y1 - band), min(h, y2 + band)
 
     spans: list[tuple[int, int, int]] = []   # (y, início, fim) por linha qualificada
     for y in range(top, bottom):
-        span = _longest_stroke(mask[y])
-        if span and span[1] - span[0] >= 0.5 * (x2 - x1):
+        span = _stroke_over(mask[y], x1, x2)
+        if span and span[1] - span[0] >= min_len:
             spans.append((y, *span))
     groups: list[list[tuple[int, int, int]]] = []
     for s in spans:
@@ -86,20 +94,21 @@ def find_rules(mask: np.ndarray, bbox: tuple[float, float, float, float]) -> lis
         else:
             groups.append([s])
 
+    ink_rows = np.flatnonzero(block.any(axis=1)) + y1
     rules = []
     for g in groups:
         if len(g) > 4:
             continue
         g_top, g_bottom = g[0][0], g[-1][0] + 1
         # tinta do texto do bloco (sem o filete), para medir a folga
-        rows = np.flatnonzero(mask[y1:y2, x1:x2].any(axis=1)) + y1
-        rows = rows[(rows < g_top) | (rows >= g_bottom)]
+        rows = ink_rows[(ink_rows < g_top) | (ink_rows >= g_bottom)]
         below = (g_top + g_bottom) / 2 >= (y1 + y2) / 2
         near = rows[rows < g_top] if below else rows[rows >= g_bottom]
-        if near.size:
-            gap = g_top - (near.max() + 1) if below else near.min() - g_bottom
-        else:
-            gap = 0
+        if not near.size:
+            continue   # nenhuma tinta de texto do lado do bloco
+        gap = g_top - (near.max() + 1) if below else near.min() - g_bottom
+        if gap < 1:
+            continue   # encostado na tinta: serifa ou traço de letra
         rules.append(RuleMetrics(
             position="below" if below else "above",
             x1_px=float(min(s[1] for s in g)), x2_px=float(max(s[2] for s in g)),
@@ -108,17 +117,21 @@ def find_rules(mask: np.ndarray, bbox: tuple[float, float, float, float]) -> lis
     return rules
 
 
-def _longest_stroke(row: np.ndarray) -> tuple[int, int] | None:
-    """Maior trecho de tinta da linha, unindo falhas de até 2 px; exige ≥ 90% de preenchimento."""
+def _stroke_over(row: np.ndarray, x1: int, x2: int) -> tuple[int, int] | None:
+    """Trecho de tinta da linha com maior sobreposição com [x1, x2), unindo falhas de até 2 px.
+
+    Exige sobreposição ≥ metade de x2 − x1 e ≥ 90% de preenchimento do trecho.
+    """
     cols = np.flatnonzero(row)
     if cols.size == 0:
         return None
     breaks = np.flatnonzero(np.diff(cols) > 3)
-    starts = np.concatenate(([0], breaks + 1))
-    ends = np.concatenate((breaks, [cols.size - 1]))
-    k = int(np.argmax(cols[ends] - cols[starts]))
-    a, b = int(cols[starts[k]]), int(cols[ends[k]]) + 1
-    if row[a:b].sum() < 0.9 * (b - a):
+    starts = cols[np.concatenate(([0], breaks + 1))]
+    ends = cols[np.concatenate((breaks, [cols.size - 1]))] + 1
+    overlap = np.minimum(ends, x2) - np.maximum(starts, x1)
+    k = int(np.argmax(overlap))
+    a, b = int(starts[k]), int(ends[k])
+    if overlap[k] < 0.5 * (x2 - x1) or row[a:b].sum() < 0.9 * (b - a):
         return None
     return a, b
 

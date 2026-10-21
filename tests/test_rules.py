@@ -2,6 +2,8 @@ import json
 
 import numpy as np
 import pypdfium2 as pdfium
+import pytest
+from PIL import Image, ImageDraw, ImageFont
 
 from ocrpdf import probe
 from ocrpdf.model import Document
@@ -22,6 +24,46 @@ def test_find_rules_below_title():
 def test_text_line_below_title_is_not_a_rule():
     image, regions = benjamin_like_page()
     assert probe.find_rules(probe.ink_mask(image), regions[1].bbox) == []   # subtítulo
+
+
+_LIBERATION = "/usr/share/fonts/truetype/liberation/Liberation{}.ttf"
+
+
+def _blank_page(height: int = 600) -> tuple[Image.Image, ImageDraw.ImageDraw]:
+    img = Image.new("RGB", (1700, height), "white")      # largura de uma página Letter a 200 dpi
+    return img, ImageDraw.Draw(img)
+
+
+@pytest.mark.parametrize("weight", ["Regular", "Bold"])
+@pytest.mark.parametrize("size", [34, 40])
+@pytest.mark.parametrize("text", ["I", "II", "III", "IV"])
+def test_serifs_of_short_title_are_not_rules(text, size, weight):
+    img, d = _blank_page()
+    font = ImageFont.truetype(_LIBERATION.format(f"Serif-{weight}"), size)
+    d.text((820, 300), text, font=font, fill=0)
+    assert probe.find_rules(probe.ink_mask(img), d.textbbox((820, 300), text, font=font)) == []
+
+
+def test_stroke_in_another_column_is_not_a_rule():
+    img, d = _blank_page()
+    font = ImageFont.truetype(_LIBERATION.format("Sans-Bold"), 47)
+    d.text((151, 157), "Título da seção", font=font, fill=0)
+    x1, y1, x2, y2 = d.textbbox((151, 157), "Título da seção", font=font)
+    assert x2 < 700
+    d.rectangle((880, y2 + 3, 1548, y2 + 4), fill=0)     # traço na outra coluna, à altura do título
+    assert probe.find_rules(probe.ink_mask(img), (x1, y1, x2, y2)) == []
+
+
+def test_text_line_inside_search_band_is_not_a_rule():
+    img, d = _blank_page()
+    bold = ImageFont.truetype(_LIBERATION.format("Sans-Bold"), 47)
+    reg = ImageFont.truetype(_LIBERATION.format("Sans-Regular"), 29)
+    title = "A obra de arte na era de sua reprodutibilidade técnica"
+    d.text((251, 157), title, font=bold, fill=0)
+    bbox = d.textbbox((251, 157), title, font=bold)
+    sub = "(Primeira versão, tradução de teste) — com um subtítulo comprido"
+    d.text((251, bbox[3] + 12), sub, font=reg, fill=0)        # 12 px abaixo: dentro da faixa de busca
+    assert probe.find_rules(probe.ink_mask(img), bbox) == []
 
 
 def _longest_dark_row_fraction(pdf, page: int, y_range_pt: tuple[float, float]) -> float:
