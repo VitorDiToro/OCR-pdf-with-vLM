@@ -33,7 +33,7 @@ class Rule:
 
     thickness_pt: float
     gap_pt: float          # folga entre o texto e o filete
-    left_em: float         # início do filete − esquerda da área de texto, em em do bloco
+    left_em: float         # início do filete − esquerda da área de texto, em em do corpo
     right_frac: float      # (direita da área − fim do filete) / largura da área, 0–1
 
 

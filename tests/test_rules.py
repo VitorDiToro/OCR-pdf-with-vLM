@@ -6,11 +6,12 @@ import pytest
 from PIL import Image, ImageDraw, ImageFont
 
 from ocrpdf import probe
-from ocrpdf.model import Document
+from ocrpdf.model import Block, BlockStyle, Document, PageGeometry, Rule, Span
 from ocrpdf.ocr.base import PageLayout
 from ocrpdf.pipeline import Pipeline
 from ocrpdf.render import render_pdf
 from synth import FakeEngine, benjamin_like_page, make_pdf
+from test_render import _text_positions
 
 
 def test_find_rules_below_title():
@@ -66,21 +67,21 @@ def test_text_line_inside_search_band_is_not_a_rule():
     assert probe.find_rules(probe.ink_mask(img), bbox) == []
 
 
-def _longest_dark_row_fraction(pdf, page: int, y_range_pt: tuple[float, float]) -> float:
-    """Maior trecho escuro contínuo de uma linha de pixels, como fração da largura da página."""
+def _longest_dark_run(pdf, page: int, y_range_pt: tuple[float, float]) -> tuple[float, float]:
+    """Maior trecho escuro contínuo de uma linha de pixels: (início, fim) em pt."""
     doc = pdfium.PdfDocument(str(pdf))
     try:
         gray = np.asarray(doc[page].render(scale=2).to_pil().convert("L"))
     finally:
         doc.close()
-    best = 0
+    best = (0, 0)
     for y in range(int(y_range_pt[0] * 2), int(y_range_pt[1] * 2)):
-        run = longest = 0
-        for dark in gray[y] < 128:
+        run = 0
+        for x, dark in enumerate(gray[y] < 128):
             run = run + 1 if dark else 0
-            longest = max(longest, run)
-        best = max(best, longest)
-    return best / gray.shape[1]
+            if run > best[1] - best[0]:
+                best = (x + 1 - run, x + 1)
+    return best[0] / 2, best[1] / 2
 
 
 def test_rule_reaches_pdf(tmp_path):
@@ -93,7 +94,38 @@ def test_rule_reaches_pdf(tmp_path):
     render_pdf(doc, out, base_dir=tmp_path / "w")
     # linha horizontal escura abaixo do título, ocupando ≥ 75% da área de texto
     # (a área de texto tem ~ 0,82 da largura da página)
-    assert _longest_dark_row_fraction(out, page=0, y_range_pt=(70, 110)) >= 0.75 * 0.82
+    x1, x2 = _longest_dark_run(out, page=0, y_range_pt=(70, 110))
+    assert (x2 - x1) / doc.page.width_pt >= 0.75 * 0.82
+    # começa onde começava no original: 3 px (≈ 1 pt) à direita do início do título
+    title_x = next(x for text, x, _ in _text_positions(out) if text.startswith("A obra"))
+    assert x1 - title_x == pytest.approx(3 * 612 / 1700, abs=1.5)
+
+
+def _ruled_title(rules: bool, indent_em: float, right_frac: float, text: str) -> Document:
+    doc = Document(page=PageGeometry(612, 792, 72, 72, 72, 72), body_font_pt=10, font_family="sans")
+    style = BlockStyle(align="left", indent_em=indent_em, font_size_pt=17)
+    if rules:
+        style.rule_above = Rule(thickness_pt=0.75, gap_pt=2, left_em=1.0, right_frac=right_frac)
+        style.rule_below = Rule(thickness_pt=0.75, gap_pt=2, left_em=1.0, right_frac=right_frac)
+    doc.blocks.append(Block(kind="title", level=1, spans=[Span(text)], style=style))
+    return doc
+
+
+def test_underlined_title_stays_on_one_line(tmp_path):
+    # filete mais curto que o título (termina a 60% da área da direita): não estreita o título
+    doc = _ruled_title(True, 0.0, 0.6, "Um título sublinhado bem comprido na página")
+    out = tmp_path / "out.pdf"
+    render_pdf(doc, out, base_dir=tmp_path)
+    assert len({round(y, 1) for _, _, y in _text_positions(out)}) == 1
+
+
+def test_rules_do_not_change_title_indent(tmp_path):
+    xs = []
+    for rules in (False, True):
+        out = tmp_path / f"out_{rules}.pdf"
+        render_pdf(_ruled_title(rules, 3.0, 0.2, "Título com filetes"), out, base_dir=tmp_path)
+        xs.append(_text_positions(out)[0][1])
+    assert xs[1] == pytest.approx(xs[0], abs=0.5)
 
 
 def test_old_files_without_rules_load(tmp_path):

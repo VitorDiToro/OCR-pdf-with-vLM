@@ -334,7 +334,7 @@ class _Builder:
             rule = Rule(
                 thickness_pt=round(max(0.25, rm.thickness_px * k), 2),
                 gap_pt=round(rm.gap_px * k, 2),
-                left_em=round(max(0.0, (rm.x1_px * k - c_left) / em_pt), 2),
+                left_em=round(max(0.0, (rm.x1_px * k - c_left) / doc.body_font_pt), 2),   # em do corpo
                 right_frac=round(min(1.0, max(0.0, (c_right - rm.x2_px * k) / c_width)), 3),
             )
             if rm.position == "below":
