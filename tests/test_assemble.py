@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import pytest
+
 from ocrpdf.assemble import assemble
 from ocrpdf.ocr.base import LineMetrics, PageLayout, Region
+from ocrpdf.render import render_pdf
+from test_render import _text_positions
 
 
 def page(*regions: Region) -> PageLayout:
@@ -61,3 +65,22 @@ def test_centered_titles_sharing_x_with_only_one_other_block_stay_centered():
     doc = assemble([page(title([400, 157, 1298, 209]), heading([400, 334, 1298, 375]),
                          para(), para())])
     assert [b.style.align for b in doc.blocks[:2]] == ["center", "center"]
+
+
+def test_repeated_centered_titles_do_not_support_each_other():
+    # "I", "II", "III" centralizados, de larguras parecidas: começam quase no mesmo x
+    doc = assemble([page(heading([841, 157, 857, 197]), heading([833, 257, 865, 297]),
+                         heading([825, 357, 873, 397]), para(), para())])
+    assert [b.style.align for b in doc.blocks[:3]] == ["center", "center", "center"]
+
+
+def test_heading_of_body_size_keeps_paragraph_indent_in_pdf(tmp_path):
+    # título do tamanho do corpo (ascent 21 como o parágrafo) no recuo dos parágrafos (3,36 em)
+    m = LineMetrics(lines=1, line_pitch_px=0.0, ascent_px=21.0, first_indent_px=0.0, align="left")
+    head = Region("section-header", (249, 157, 700, 187), "Seção em negrito", m)
+    doc = assemble([page(head, para(), para())], font_family="sans")
+    assert doc.blocks[0].style.font_size_pt is not None      # mede sempre o tamanho do título
+    out = tmp_path / "out.pdf"
+    render_pdf(doc, out, base_dir=tmp_path)
+    xs = {text.split()[0]: x for text, x, _ in _text_positions(out)}
+    assert xs["Seção"] == pytest.approx(xs["Um"], abs=1.0)

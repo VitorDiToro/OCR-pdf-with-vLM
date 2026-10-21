@@ -138,13 +138,15 @@ def _left_positions(
 
     O deslocamento é contado a partir da esquerda da área de texto da página. Linha única
     (título, subtítulo, texto) conta pelo início do bbox; texto de várias linhas conta pelo
-    início + recuo da 1ª linha. Quem começa a menos de 1 em da margem já é `left` e não entra.
+    início + recuo da 1ª linha. Quem começa a menos de 1 em da margem já é `left` e não entra,
+    nem a linha única simétrica na área de texto: títulos centralizados de larguras parecidas
+    ("I", "II", "III") começam quase no mesmo x e se apoiariam uns nos outros.
     """
     stops: list[tuple[float, tuple[int, int]]] = []
     for p in pages:
         if p.index not in content:
             continue
-        c_left = content[p.index][0]
+        c_left, c_right = content[p.index]
         for i, r in enumerate(p.regions):
             m = r.metrics
             if r.category not in ("title", "section-header", "text") or not m:
@@ -154,9 +156,17 @@ def _left_positions(
                 if m.first_indent_px <= 0:
                     continue
                 offset += m.first_indent_px * p.px_to_pt
+            elif _symmetric(offset, c_right - r.bbox[2] * p.px_to_pt, c_right - c_left):
+                continue
             if offset >= body_font_pt:
                 stops.append((offset, (p.index, i)))
     return stops
+
+
+def _symmetric(left: float, right: float, width: float) -> bool:
+    """Linha única centralizada: folgas parecidas (± 4% da área de texto) até as duas margens."""
+    tol = width * 0.04
+    return left > tol and right > tol and abs(left - right) < tol
 
 
 def _running_header(doc: Document, pages: list[PageLayout]) -> None:
@@ -295,7 +305,8 @@ class _Builder:
         fpx = _font_px(r)
         if fpx:
             size = fpx * k
-            if abs(size - doc.body_font_pt) / doc.body_font_pt > 0.12:
+            # títulos sempre: sem tamanho próprio, o h2/h3 do CSS (1,25em…) deslocaria o recuo
+            if r.category in ("title", "section-header") or abs(size - doc.body_font_pt) / doc.body_font_pt > 0.12:
                 style.font_size_pt = round(size * 2) / 2
         em_pt = style.font_size_pt or doc.body_font_pt
 
@@ -311,7 +322,7 @@ class _Builder:
                 # mesma posição de outros blocos (recuo de parágrafo, subtítulos): é `left`
                 style.align = "left"
                 style.indent_em = round(left / em_pt, 2)
-            elif left > tol and right > tol and abs(left - right) < tol:
+            elif _symmetric(left, right, c_width):
                 style.align = "center"
             elif left > right + tol and right < tol:
                 style.align = "right"
