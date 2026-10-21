@@ -35,24 +35,30 @@ def ink_mask(page: Image.Image) -> np.ndarray:
     return gray <= threshold
 
 
-def measure(mask: np.ndarray, bbox: tuple[float, float, float, float]) -> LineMetrics | None:
+def measure(mask: np.ndarray, bbox: tuple[float, float, float, float],
+            overlap: tuple[float, float] = (0.0, 0.0)) -> LineMetrics | None:
+    """Medidas do bloco `bbox`. `overlap` = (topo, base): quantos px das bordas do bbox também estão
+    no bbox de um bloco vizinho (o dots às vezes sobrepõe os bboxes, ver `pipeline._overlaps`)."""
     x1, y1, x2, y2 = (int(round(v)) for v in bbox)
-    region = mask[max(y1, 0):y2, max(x1, 0):x2]
-    if region.size == 0 or region.shape[1] < 8:
+    crop = mask[max(y1, 0):y2, max(x1, 0):x2]
+    if crop.size == 0 or crop.shape[1] < 8:
         return None
 
     # página torta no scanner: sem endireitar, as linhas de um bloco largo se encostam na projeção
     # horizontal e o bloco inteiro vira uma "linha" (fonte de centenas de pt)
-    crop = region
-    region, _, _, tan = straighten(crop)
+    region, shift, offset, tan = straighten(crop)
     lines = line_spans(region)
-    if len(lines) > 2:
-        # bbox que invade a linha do bloco vizinho: o pedaço cortado na borda (baixo e com tinta na
-        # borda do recorte) não é uma linha do bloco; contado, ele zera o recuo e desfaz o justificado
+    # linha cuja tinta fica toda na faixa sobreposta é a do vizinho, cortada pelo recorte: contada,
+    # ela zera o recuo e desfaz o justificado. Medido no recorte original (a borda dele é horizontal
+    # lá, não no endireitado), e só para faixas menores que uma linha, para nunca descartar uma
+    # linha inteira deste bloco
+    top_ov, bottom_ov = overlap
+    if len(lines) > 1:
         typical = float(np.median([b - a for a, b in lines]))
-        if lines[0][1] - lines[0][0] < 0.6 * typical and crop[0].any():
+        if 0 < top_ov < typical and _source_rows(region, lines[0], shift, offset).max() < top_ov + 1:
             lines = lines[1:]
-        if lines[-1][1] - lines[-1][0] < 0.6 * typical and crop[-1].any():
+        if 0 < bottom_ov < typical and \
+                _source_rows(region, lines[-1], shift, offset).min() >= crop.shape[0] - bottom_ov - 1:
             lines = lines[:-1]
     if not lines:
         return None
@@ -184,6 +190,13 @@ def straighten(region: np.ndarray) -> tuple[np.ndarray, np.ndarray, int, float]:
     straight = np.zeros((region.shape[0] + offset - int(shift.min()), region.shape[1]), dtype=bool)
     straight[ys - shift[xs] + offset, xs] = True
     return straight, shift, offset, tan
+
+
+def _source_rows(straight: np.ndarray, span: tuple[int, int], shift: np.ndarray, offset: int) -> np.ndarray:
+    """Linhas (y) do recorte original ocupadas pela tinta da faixa `span` do bloco endireitado."""
+    a, b = span
+    ys, xs = np.nonzero(straight[a:b])
+    return ys + a + shift[xs] - offset
 
 
 def skew_deg(xs: np.ndarray, ys: np.ndarray) -> float:

@@ -199,9 +199,10 @@ class Pipeline:
 
     def _measure(self, layout: PageLayout, image: Image.Image, mask: np.ndarray) -> PageLayout:
         """Recalcula as medidas de cada região a partir da imagem e recorta as figuras."""
+        boxes = [r.bbox for r in layout.regions]
         for n, r in enumerate(layout.regions):
             if r.category in _MEASURED:
-                r.metrics = probe.measure(mask, r.bbox)
+                r.metrics = probe.measure(mask, r.bbox, _overlaps(r.bbox, boxes[:n] + boxes[n + 1:]))
             # zera também as demais categorias: o cache pode trazer filetes de outra versão
             r.rules = probe.find_rules(mask, r.bbox) if r.category in _RULED else []
             if r.category == "picture":
@@ -323,6 +324,23 @@ class _Watched:
         except Exception as exc:
             self.error = exc
             raise
+
+
+def _overlaps(bbox: tuple[float, float, float, float],
+              others: list[tuple[float, float, float, float]]) -> tuple[float, float]:
+    """Quantos px do topo e da base de `bbox` também estão no bbox de um bloco vizinho da mesma coluna
+    (o dots às vezes sobrepõe os bboxes de blocos seguidos em ~15 px; a probe decide de quem é a linha
+    que cai nessa faixa)."""
+    x1, y1, x2, y2 = bbox
+    top = bottom = 0.0
+    for ox1, oy1, ox2, oy2 in others:
+        if min(x2, ox2) - max(x1, ox1) < 0.5 * min(x2 - x1, ox2 - ox1):
+            continue   # outra coluna
+        if oy1 < y1 < oy2 < y2:
+            top = max(top, oy2 - y1)
+        if y1 < oy1 < y2 < oy2:
+            bottom = max(bottom, y2 - oy1)
+    return top, bottom
 
 
 def _by_page(evidence: dict[tuple[int, int], BlockEvidence]) -> dict[int, list[BlockEvidence]]:

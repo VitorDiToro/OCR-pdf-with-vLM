@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 from PIL import Image, ImageDraw, ImageFont
 
 from ocrpdf import probe
-from synth import _FONTS, _paragraph, benjamin_like_page
+from synth import _FONTS, _paragraph, bbox_of, sample_lines, text_image
 
 _LEFT, _RIGHT, _TOP = 151, 1547, 100
 
@@ -39,22 +40,59 @@ def test_skewed_paragraph_keeps_lines_indent_and_alignment(angle):
     assert m.first_indent_px == pytest.approx(level.first_indent_px, abs=4)
 
 
-@pytest.mark.parametrize("cut", ["top", "bottom"])
-def test_bbox_overlapping_a_neighbour_line_ignores_the_cut_piece(cut):
-    # o bbox do dots às vezes invade a linha do bloco vizinho; o pedaço cortado na borda não é uma linha
-    image, regions = benjamin_like_page()
-    (x1, y1, x2, y2), (_, y3, _, y4) = regions[3].bbox, regions[4].bbox   # os dois parágrafos
-    mask = probe.ink_mask(image)
-    if cut == "top":      # o 2º parágrafo, com o bbox subindo até a última linha do 1º
-        level, bbox = probe.measure(mask, (x1, y3, x2, y4)), (x1, y2 - 12, x2, y4)
-    else:                 # o 1º parágrafo, com o bbox descendo até a 1ª linha do 2º
-        level, bbox = probe.measure(mask, (x1, y1, x2, y2)), (x1, y1, x2, y3 + 20)
-    # controle: o pedaço cortado aparece como uma faixa a mais
-    region = mask[bbox[1]:bbox[3], bbox[0]:bbox[2]]
-    assert len(probe.line_spans(probe.straighten(region)[0])) == 6
-    m = probe.measure(mask, bbox)
-    assert (m.lines, m.align) == (level.lines, level.align) == (5, "justify")
-    assert m.first_indent_px == pytest.approx(level.first_indent_px, abs=2)
+def _two_paragraphs(angle: float):
+    """Os dois parágrafos de 5 linhas do synth (tops 398 e 574), girados `angle` graus em torno do
+    meio deles; devolve a imagem, a máscara e o bbox da tinta de cada um, como o dots os daria."""
+    font = ImageFont.truetype(_FONTS.format("Regular"), 29)
+
+    def render(*paragraphs):
+        img = Image.new("RGB", (1700, 1000), "white")
+        for top, seed in paragraphs:
+            _paragraph(ImageDraw.Draw(img), font, top, seed=seed, left=_LEFT, right=_RIGHT)
+        return img.rotate(angle, resample=Image.Resampling.BICUBIC, center=((_LEFT + _RIGHT) / 2, 563),
+                          fillcolor="white")
+
+    boxes = []
+    for paragraph in ((398, 0), (574, 7)):
+        ys, xs = np.nonzero(probe.ink_mask(render(paragraph)))
+        boxes.append((int(xs.min()), int(ys.min()), int(xs.max()) + 1, int(ys.max()) + 1))
+    image = render((398, 0), (574, 7))
+    return image, probe.ink_mask(image), boxes
+
+
+@pytest.mark.parametrize("angle", [0.0, 1.0, -1.0])
+def test_neighbour_line_cut_by_the_bbox_is_not_a_line(angle):
+    # o bbox do dots às vezes invade a linha do bloco vizinho; o pipeline informa a faixa sobreposta
+    _, mask, ((ax1, ay1, ax2, ay2), (bx1, by1, bx2, by2)) = _two_paragraphs(angle)
+    first, second = probe.measure(mask, (ax1, ay1, ax2, ay2)), probe.measure(mask, (bx1, by1, bx2, by2))
+    assert (first.lines, first.align, second.lines, second.align) == (5, "justify", 5, "justify")
+
+    up = (bx1, ay2 - 12, bx2, by2)          # o 2º sobe 12 px na última linha do 1º
+    assert probe.measure(mask, up).lines == 6                 # controle: sem a faixa, o pedaço conta
+    m = probe.measure(mask, up, overlap=(12, 0))
+    assert (m.lines, m.align) == (5, "justify")
+    assert m.first_indent_px == pytest.approx(second.first_indent_px, abs=2)
+
+    down = (ax1, ay1, ax2, by1 + 20)        # o 1º desce 20 px na 1ª linha do 2º
+    assert probe.measure(mask, down).lines == 6
+    m = probe.measure(mask, down, overlap=(0, 20))
+    assert (m.lines, m.align) == (5, "justify")
+
+
+def test_line_of_its_own_crossing_the_overlap_is_kept():
+    # vizinho com o bbox folgado: a faixa sobreposta pega o topo da 1ª linha DESTE bloco, que continua
+    # abaixo dela e não pode ser descartada
+    _, mask, (_, (bx1, by1, bx2, by2)) = _two_paragraphs(0.0)
+    level = probe.measure(mask, (bx1, by1, bx2, by2))
+    m = probe.measure(mask, (bx1, by1, bx2, by2), overlap=(15, 0))
+    assert (m.lines, m.first_indent_px) == (level.lines, level.first_indent_px)
+
+
+def test_short_last_line_without_neighbour_is_kept():
+    # última linha só com letras baixas ("anos.") num bbox justo: sem vizinho sobreposto, é uma linha
+    lines = sample_lines()[:4] + [[("anos.", False)]]
+    image, truth = text_image(lines)
+    assert probe.measure(probe.ink_mask(image), bbox_of(truth)).lines == 5
 
 
 def test_straighten_keeps_a_level_block():
