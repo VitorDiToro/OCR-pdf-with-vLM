@@ -7,7 +7,8 @@ possível do original e **notas ligadas por links** (chamada no texto ↔ nota, 
 Documento de referência usado no desenvolvimento: ensaio "A obra de arte na era de sua
 reprodutibilidade técnica" (W. Benjamin), 14 páginas Letter escaneadas a 150 dpi, uma coluna,
 fonte sem serifa (Arial), muito texto em itálico, cabeçalho corrente em todas as páginas exceto a 1ª,
-uma nota de rodapé (¹) no título "Primeira Versão". **Não está no repositório**; peça ao usuário.
+uma nota de rodapé (¹) no título "Primeira Versão". Está em `exemplo/sample.pdf`, com o resultado
+publicado em `exemplo/resultado.pdf`.
 
 ## Preferências do usuário
 
@@ -127,7 +128,11 @@ src/ocrpdf/
   - Para respeitar `orphans`/`widows`, ele adia notas já colocadas para a página seguinte
     (ignora `footnote-policy`; em cascata a nota vai várias páginas adiante). `render/__init__.py`
     recompila `_linebox_layout` trocando a linha `report = …` por `report = False` (se a linha
-    mudar numa versão futura, só avisa). `tests/test_render.py` cobre o patch e o defeito.
+    mudar numa versão futura, só avisa). Aconteceu no exemplo com fonte serif (nota 1 → p. 3).
+  - Nota que não cabe sob a chamada: com `footnote-policy: auto` só a nota vai para a página
+    seguinte; `style.css` usa `line` (a linha da chamada vai junto). Aconteceu na 2ª execução do
+    exemplo (chamada ² na última linha da p. 5). O patch e a política são ambos necessários;
+    `tests/test_render.py` tem um documento sintético para cada caso e controles sem cada correção.
   - Seletores de margin box separados por vírgula (`@top-left, @top-right {…}`) invalidam a regra.
   - Margin boxes herdam do elemento raiz, não do `body`: `font-family` vai no `html`.
   - `background-size` de gradiente é ignorado no `@footnote` (pinta a área toda de preto).
@@ -149,7 +154,7 @@ títulos ≈ 13–13,5 pt; título principal ≈ 17 pt; nota ≈ 8 pt.
 ## Estado atual
 
 Repositório: github.com/VitorDiToro/OCR-pdf-with-vLM (público; `*.pdf` fora do git, exceto
-`tests/**/*.pdf`). PDF de referência local em `sample/sample.pdf`.
+`exemplo/*.pdf` e `tests/**/*.pdf`).
 
 Feito e conferido:
 - **Execução real** (2026-10-20): dots.mocr no vLLM 0.17.1, RTX 3060 12 GB (o desktop ocupa

@@ -45,6 +45,8 @@ a.note-label { color: #1a4c9a; }
 
 .footnote {
   float: footnote;
+  /* nota que não cabe na página leva junto a linha da chamada (auto adiaria só a nota) */
+  footnote-policy: line;
   footnote-display: block;
   font-size: var(--note-size);
   line-height: 1.2;

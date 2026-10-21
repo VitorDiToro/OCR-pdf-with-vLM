@@ -11,8 +11,9 @@ dist/
 *_work/
 work/
 
-# PDFs de entrada/saída (podem ter direitos autorais); fixtures de teste ficam liberadas
+# PDFs de entrada/saída (podem ter direitos autorais); liberados só o exemplo e fixtures de teste
 *.pdf
+!exemplo/*.pdf
 !tests/**/*.pdf
 
 # Claude Code (configuração local)
