@@ -81,6 +81,6 @@ class OcrEngine(Protocol):
         """Devolve as regiões da página em ordem de leitura, com bbox em pixels de `image`."""
         ...
 
-    def ask(self, image: Image.Image, question: str) -> str:
+    def ask(self, image: Image.Image, question: str, max_tokens: int = 128) -> str:
         """Pergunta livre sobre a imagem (usada para classificar a fonte)."""
         ...
