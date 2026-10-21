@@ -94,6 +94,17 @@ def fuse(ev: BlockEvidence, rule: str) -> list[bool]:
     return out
 
 
+def fusable(ev: BlockEvidence) -> bool:
+    """A fusão só vale em bloco com marcas do 2º modelo e ao menos uma inclinação medida; sem medida
+    nenhuma, ela descartaria todo o itálico do dots."""
+    return ev.model is not None and any(s is not None for s in ev.slant)
+
+
+def final_flags(ev: BlockEvidence, rule: str) -> list[bool]:
+    """Flags que a conversão aplica ao bloco: a fusão onde ela vale; fora disso, as marcas do dots."""
+    return fuse(ev, rule) if fusable(ev) else list(ev.dots)
+
+
 def _letters(token: str) -> int:
     return sum(c.isalpha() for c in token)
 

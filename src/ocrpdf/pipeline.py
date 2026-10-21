@@ -18,7 +18,7 @@ from PIL import Image
 from . import probe
 from .assemble import assemble
 from .italic.marker import mark_italics
-from .italic.stage import BlockEvidence, fuse, load_marks, needs_model, page_evidence, save_marks, tokens_key
+from .italic.stage import BlockEvidence, fuse, fusable, load_marks, needs_model, page_evidence, save_marks, tokens_key
 from .model import Document
 from .ocr.base import OcrEngine, PageLayout, Region
 from .servers import NullSwitcher, Switcher
@@ -94,7 +94,7 @@ class Pipeline:
                 # spans do OCR, intactos (itálico parcial de palavra, como "*Aura*s", não cabe nas
                 # marcas por token; sem medida nenhuma, a fusão descartaria todo o itálico do dots)
                 italic = {key: fuse(ev, self.italic.rule) for key, ev in evidence.items()
-                          if ev.model is not None and any(s is not None for s in ev.slant)}
+                          if fusable(ev)}
             else:
                 self._measure_pages(pdf_path, indices)
         finally:
