@@ -171,6 +171,20 @@ class RestartSwitcher:
                 pass
         except ProcessLookupError:
             pass
+        _wait_group(proc.pid)
+
+
+def _wait_group(pgid: int, timeout: float = 30.0) -> None:
+    """Espera o grupo de processos sumir: a VRAM só volta quando o último processo do vLLM termina, e
+    o próximo servidor calcula GPU_MEM pela memória livre na partida (com sobra presa, ele sobe com
+    KV cache minúsculo ou nem sobe)."""
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        try:
+            os.killpg(pgid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.1)
 
 
 def default_script() -> Path:

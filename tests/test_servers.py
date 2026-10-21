@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import signal
 import socket
 import subprocess
@@ -10,6 +11,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from ocrpdf import servers
 from ocrpdf.servers import (
     NullSwitcher,
     RestartSwitcher,
@@ -195,6 +197,42 @@ def test_signal_to_ocrpdf_stops_the_server(tmp_path, sig):
         assert _down(port)
     finally:
         proc.kill()
+
+
+def test_restart_switcher_kills_server_that_ignores_sigint(tmp_path, monkeypatch):
+    monkeypatch.setattr(servers, "_STOP_TIMEOUT", 1.0)
+    port = _free_port()
+    sw = RestartSwitcher({"ocr": ("m", port)}, FAKE_SERVE, tmp_path, ready_timeout=30,
+                         env={"ocr": {"FAKE_IGNORE_INT": "1"}})
+    sw.use("ocr")
+    start = time.monotonic()
+    sw.close()
+    # esperou o SIGINT não adiantar (≥ 1 s) e derrubou com SIGKILL
+    assert 1.0 <= time.monotonic() - start < 10 and _down(port)
+
+
+def test_restart_switcher_kills_the_whole_group_and_waits(tmp_path):
+    # o vLLM cria processos de trabalho: um filho que sobrevive ao líder também morre, e close() só
+    # volta quando o grupo sumiu (a VRAM só é devolvida quando o último processo termina)
+    script = tmp_path / "serve.sh"
+    script.write_text(f'#!/usr/bin/env bash\nsleep 300 &\nexec "{FAKE_SERVE}" "$@"\n')
+    script.chmod(0o755)
+    sw = RestartSwitcher({"ocr": ("m", _free_port())}, script, tmp_path, ready_timeout=30)
+    sw.use("ocr")
+    pgid = sw._proc.pid
+    sw.close()
+    with pytest.raises(ProcessLookupError):
+        os.killpg(pgid, 0)
+
+
+def test_restart_switcher_gives_up_when_server_never_answers(tmp_path):
+    script = tmp_path / "mudo.sh"
+    script.write_text("#!/usr/bin/env bash\necho subindo\nexec sleep 300\n")
+    script.chmod(0o755)
+    sw = RestartSwitcher({"ocr": ("m", _free_port())}, script, tmp_path, ready_timeout=1)
+    with pytest.raises(RuntimeError, match="não ficou pronto em 1 s(.|\n)*subindo"):
+        sw.use("ocr")
+    assert sw._proc is None
 
 
 def test_restart_switcher_reports_dead_process(tmp_path):
