@@ -248,6 +248,10 @@ class Pipeline:
                         if error is not None:
                             errors.append(error)
                             continue
+                        if marks is None:
+                            log.warning("itálico: resposta do 2º modelo rejeitada na pág. %d, bloco %d (alterou o "
+                                        "texto ou foi cortada pelo limite de tokens); vale o itálico do OCR",
+                                        page + 1, ev.region)
                         ev.model = marks
                         cached[page][ev.region] = (tokens_key(ev.tokens), marks)
                     for page in chunk:

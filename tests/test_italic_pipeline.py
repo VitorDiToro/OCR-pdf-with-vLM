@@ -228,9 +228,11 @@ def test_marker_failure_is_an_error_and_not_cached(tmp_path, failure, name):
     assert doc_italics(r.doc) == {TOKS[2], TOKS[3]}
 
 
-def test_rejected_answer_is_cached(tmp_path):
+def test_rejected_answer_is_cached(tmp_path, caplog):
     r = run(tmp_path, answers=[" ".join(TOKS).replace("viagem", "viajem")])   # o modelo "corrigiu"
     assert r.marker.asked == 1 and doc_italics(r.doc) == set()                 # vale o dots
+    # rejeição avisada (resposta que altera o texto ou cortada pelo limite de tokens)
+    assert "2º modelo" in caplog.text and "pág. 1, bloco 0" in caplog.text
     assert run(tmp_path).marker.asked == 0
 
 
