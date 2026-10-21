@@ -1,4 +1,5 @@
-"""Utilitários de teste: PDF de páginas-imagem, engine falso e uma página sintética estilo Benjamin."""
+"""Utilitários de teste: PDF de páginas-imagem, engine falso, uma página sintética estilo Benjamin e
+texto sintético palavra a palavra (regular/itálico) para a detecção de itálico."""
 
 from __future__ import annotations
 
@@ -10,7 +11,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 from ocrpdf.ocr.base import Region
 
-_FONTS = "/usr/share/fonts/truetype/liberation/LiberationSans-{}.ttf"
+_LIBERATION = "/usr/share/fonts/truetype/liberation/Liberation{}-{}.ttf"
+_FONTS = _LIBERATION.format("Sans", "{}")
 _LOREM = ("A reprodução técnica da obra de arte é um processo que se intensificou lentamente na história, "
           "por saltos separados por longos intervalos, mas com intensidade crescente e penetrantes "
           "consequências para a percepção coletiva ").split()
@@ -83,6 +85,76 @@ def _paragraph(draw: ImageDraw.ImageDraw, font: ImageFont.FreeTypeFont, top: int
             _justified_line(draw, font, words, start, right, y)
         drawn.extend(words)
     return top + lines * pitch - 1, " ".join(drawn)
+
+
+_SAMPLE = (
+    "Em sua essência, a obra de arte sempre foi reprodutível.",
+    "O que os homens faziam podia ser imitado por outros",
+    "Essa imitação era praticada por discípulos, em seus exercícios",
+    "pelos mestres, para a difusão das obras e por terceiros",
+    "Em contraste, a reprodução técnica representa um processo novo",
+)
+
+
+def sample_lines(italic_every: int = 0) -> list[list[tuple[str, bool]]]:
+    """5 linhas de 9–10 palavras `(texto, itálico)`; com k > 0, cada k-ésima palavra do texto
+    (contando de 1, através das linhas) é itálica."""
+    out, n = [], 0
+    for line in _SAMPLE:
+        row = []
+        for word in line.split():
+            n += 1
+            row.append((word, italic_every > 0 and n % italic_every == 0))
+        out.append(row)
+    return out
+
+
+def flat_words(lines: list[list[tuple[str, bool]]]) -> list[str]:
+    """Texto das palavras na ordem de leitura."""
+    return [w for line in lines for w, _ in line]
+
+
+def bbox_of(truth: list[list[tuple[int, int, int, int]]]) -> tuple[int, int, int, int]:
+    """União das caixas das palavras: o bbox do bloco, como o dots o daria."""
+    boxes = [b for row in truth for b in row]
+    return (min(b[0] for b in boxes), min(b[1] for b in boxes),
+            max(b[2] for b in boxes), max(b[3] for b in boxes))
+
+
+def _ink_box(font: ImageFont.FreeTypeFont, word: str, x: float, y: int) -> tuple[int, int, int, int]:
+    """Caixa da tinta de `word` desenhada em (x, y), posicionada como `ImageDraw.text` a desenha."""
+    mask, (ox, oy) = font.getmask2(word, "L", start=(x % 1, 0))
+    left, top, right, bottom = mask.getbbox()
+    return int(x) + ox + left, y + oy + top, int(x) + ox + right, y + oy + bottom
+
+
+def text_image(lines: list[list[tuple[str, bool]]], serif: bool = False, size_px: int = 29,
+               origin: tuple[int, int] = (151, 150), page: tuple[int, int] = (1700, 800),
+               angle_deg: float = 0.0) -> tuple[Image.Image, list[list[tuple[int, int, int, int]]]]:
+    """Desenha cada palavra `(texto, itálico)` em Liberation Sans/Serif Regular/Italic, separadas
+    pelo espaço da fonte, com entrelinha de 1,1 × `size_px`; devolve a imagem e as caixas da tinta
+    das palavras por linha. `angle_deg` gira a imagem em torno do centro do bloco (anti-horário,
+    como o PIL); as caixas são as de antes da rotação."""
+    family = "Serif" if serif else "Sans"
+    fonts = {it: ImageFont.truetype(_LIBERATION.format(family, "Italic" if it else "Regular"), size_px)
+             for it in (False, True)}
+    img = Image.new("RGB", page, "white")
+    d = ImageDraw.Draw(img)
+    space, pitch = fonts[False].getlength(" "), round(1.1 * size_px)
+    truth = []
+    for n, line in enumerate(lines):
+        x, y = float(origin[0]), origin[1] + n * pitch
+        row = []
+        for word, italic in line:
+            d.text((x, y), word, font=fonts[italic], fill=0)
+            row.append(_ink_box(fonts[italic], word, x, y))
+            x += fonts[italic].getlength(word) + space
+        truth.append(row)
+    if angle_deg:
+        x1, y1, x2, y2 = bbox_of(truth)
+        img = img.rotate(angle_deg, resample=Image.Resampling.BICUBIC,
+                         center=((x1 + x2) / 2, (y1 + y2) / 2), fillcolor="white")
+    return img, truth
 
 
 def benjamin_like_page() -> tuple[Image.Image, list[Region]]:

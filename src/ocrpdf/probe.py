@@ -35,7 +35,7 @@ def measure(mask: np.ndarray, bbox: tuple[float, float, float, float]) -> LineMe
     if region.size == 0 or region.shape[1] < 8:
         return None
 
-    lines = _line_spans(region)
+    lines = line_spans(region)
     if not lines:
         return None
     width = region.shape[1]
@@ -75,7 +75,7 @@ def find_rules(mask: np.ndarray, bbox: tuple[float, float, float, float]) -> lis
     if x2 - x1 < 8 or y2 <= y1:
         return []
     block = mask[y1:y2, x1:x2]
-    lines = _line_spans(block)
+    lines = line_spans(block)
     if not lines:
         return []
     min_len = max(0.1 * w, 3 * float(np.median([b - a for a, b in lines])))
@@ -147,7 +147,7 @@ def _ascent(profile: np.ndarray) -> int:
     return int(dense[-1]) + 1 if dense.size else len(profile)
 
 
-def _line_spans(region: np.ndarray) -> list[tuple[int, int]]:
+def line_spans(region: np.ndarray) -> list[tuple[int, int]]:
     """Faixas horizontais com tinta; une lacunas pequenas (acentos, pontos do i)."""
     rows = region.sum(axis=1) > max(1, region.shape[1] * 0.002)
     spans, start = [], None
