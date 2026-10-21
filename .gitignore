@@ -22,3 +22,6 @@ work/
 
 # Artefatos da execução dos planos (superpowers)
 .superpowers/
+
+# Amostras privadas do usuário (escaneados, referências, gabaritos) — fora do git
+amostras/
