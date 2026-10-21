@@ -28,10 +28,10 @@ log = logging.getLogger(__name__)
 _MEASURED = {"text", "title", "section-header", "list-item", "caption", "footnote", "page-header", "page-footer"}
 _RULED = {"title", "section-header"}   # categorias em que se procuram filetes colados
 _FONT_QUESTION = (
-    "Look at the main body text of this page. Is its typeface serif or sans-serif? "
-    "Answer with exactly one word: serif or sans."
+    "Look closely at the letters. Do they have serifs (small strokes at the ends of the strokes, "
+    "like Times New Roman), or are they plain like Arial? Answer with one word: serif or sans."
 )
-_FONT_SAMPLES = 3  # blocos de texto (de páginas diferentes) consultados; vence a maioria
+_FONT_SAMPLES = 5  # blocos de texto (de páginas diferentes) consultados; vence a maioria
 _TYPEFACE = re.compile(r"sans(?:[- ]serif)?|serif", re.I)
 _CROP_PAD = 8      # folga (px) em torno do bbox no recorte enviado ao 2º modelo
 
