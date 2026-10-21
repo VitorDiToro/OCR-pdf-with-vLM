@@ -6,10 +6,16 @@ aqui com perfis de projeção da tinta, o que é barato e suficiente para texto 
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 from PIL import Image
 
 from .ocr.base import LineMetrics, RuleMetrics
+
+_SUB = 4                # as projeções são feitas em passos de 1/_SUB px
+_SKEW_MAX = 5.0         # maior inclinação de página procurada (graus)
+_SKEW_PIXELS = 50_000   # amostra de tinta usada para medir a inclinação
 
 
 def ink_mask(page: Image.Image) -> np.ndarray:
@@ -35,7 +41,19 @@ def measure(mask: np.ndarray, bbox: tuple[float, float, float, float]) -> LineMe
     if region.size == 0 or region.shape[1] < 8:
         return None
 
+    # página torta no scanner: sem endireitar, as linhas de um bloco largo se encostam na projeção
+    # horizontal e o bloco inteiro vira uma "linha" (fonte de centenas de pt)
+    crop = region
+    region, _, _, tan = straighten(crop)
     lines = line_spans(region)
+    if len(lines) > 2:
+        # bbox que invade a linha do bloco vizinho: o pedaço cortado na borda (baixo e com tinta na
+        # borda do recorte) não é uma linha do bloco; contado, ele zera o recuo e desfaz o justificado
+        typical = float(np.median([b - a for a, b in lines]))
+        if lines[0][1] - lines[0][0] < 0.6 * typical and crop[0].any():
+            lines = lines[1:]
+        if lines[-1][1] - lines[-1][0] < 0.6 * typical and crop[-1].any():
+            lines = lines[:-1]
     if not lines:
         return None
     width = region.shape[1]
@@ -43,8 +61,11 @@ def measure(mask: np.ndarray, bbox: tuple[float, float, float, float]) -> LineMe
     for top, bottom in lines:
         band = region[top:bottom]
         cols = np.flatnonzero(band.any(axis=0))
-        lefts.append(cols[0])
-        rights.append(cols[-1])
+        # o endireitamento só move colunas na vertical; numa página girada a margem também anda na
+        # horizontal, linha a linha (~14 px em 800 px a 1°): desconta, tomando a 1ª linha como zero
+        dx = (top - lines[0][0]) * tan
+        lefts.append(cols[0] + dx)
+        rights.append(cols[-1] + dx)
         ascents.append(_ascent(band.sum(axis=1)))
 
     starts = [t for t, _ in lines]
@@ -145,6 +166,56 @@ def _ascent(profile: np.ndarray) -> int:
     """
     dense = np.flatnonzero(profile >= profile.max() * 0.4)
     return int(dense[-1]) + 1 if dense.size else len(profile)
+
+
+def straighten(region: np.ndarray) -> tuple[np.ndarray, np.ndarray, int, float]:
+    """Bloco com as linhas na horizontal: cada coluna sobe ou desce conforme a inclinação das linhas.
+
+    Devolve a máscara endireitada, o deslocamento de cada coluna (`shift`), o `offset` que mantém
+    toda linha endireitada abaixo do topo (o pixel (y, x) endireitado fica em y + shift[x] − offset
+    no bloco original) e a tangente da inclinação (> 0 = linhas descendo para a direita).
+    """
+    ys, xs = np.nonzero(region)
+    if ys.size == 0:
+        return region, np.zeros(region.shape[1], dtype=np.int64), 0, 0.0
+    tan = math.tan(math.radians(skew_deg(xs, ys)))
+    shift = np.rint(np.arange(region.shape[1]) * tan).astype(np.int64)   # quanto cada coluna desce
+    offset = int(shift.max())
+    straight = np.zeros((region.shape[0] + offset - int(shift.min()), region.shape[1]), dtype=bool)
+    straight[ys - shift[xs] + offset, xs] = True
+    return straight, shift, offset, tan
+
+
+def skew_deg(xs: np.ndarray, ys: np.ndarray) -> float:
+    """Inclinação das linhas da tinta (xs, ys) em graus (> 0 = descem para a direita): o ângulo que
+    mais concentra a projeção horizontal. Busca grossa (±5°, passo 0,5°) e fina (±0,5°, 0,05°)."""
+    step = max(1, ys.size // _SKEW_PIXELS)
+    xs, ys = xs[::step], ys[::step]
+    best = 0.0
+    for span, delta in ((_SKEW_MAX, 0.5), (0.5, 0.05)):
+        angles = best + np.arange(-span, span + delta / 2, delta)
+        # y' = y − (x − x̄)·tan(a) deixa horizontal uma linha que desce com inclinação a
+        best = float(angles[np.argmax(projection_scores(ys, xs, -angles))])
+    return best
+
+
+def projection_scores(pos: np.ndarray, other: np.ndarray, angles: np.ndarray) -> np.ndarray:
+    """Σ p² da projeção de `pos` deslocado de (other − média)·tan(ângulo), para cada ângulo.
+
+    Cada pixel conta como um quadrado de 1 px (projeção em passos de 1/_SUB px somada numa janela de
+    1 px). Arredondar para o pixel inteiro faria os ângulos pequenos (deslocamento < 0,5 px numa
+    palavra de 15–30 px de altura) empatarem com o zero, e o pico ficaria serrilhado.
+    """
+    t = np.tan(np.radians(angles))[:, None]
+    bins = np.floor((pos + (other - other.mean()) * t) * _SUB).astype(np.int64)
+    bins -= bins.min()
+    width = int(bins.max()) + 1 + _SUB
+    counts = np.bincount((bins + np.arange(len(angles))[:, None] * width).ravel(),
+                         minlength=len(angles) * width).reshape(len(angles), width)
+    cum = np.cumsum(counts, axis=1)
+    proj = cum.copy()
+    proj[:, _SUB:] -= cum[:, :-_SUB]
+    return (proj.astype(np.float64) ** 2).sum(axis=1)
 
 
 def line_spans(region: np.ndarray) -> list[tuple[int, int]]:

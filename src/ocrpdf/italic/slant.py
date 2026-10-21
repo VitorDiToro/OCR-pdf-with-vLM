@@ -12,7 +12,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from ..probe import line_spans
+from ..probe import line_spans, projection_scores, straighten
 
 # Calibrados com os gabaritos (docs/superpowers/reports/2026-10-21-italico-avaliacao.md): a regra
 # padrão fica estável com o limiar entre 4° e 9°; itálico medido 9,5–16,5° (p5–p95), redondo ~0°.
@@ -21,12 +21,9 @@ ITALIC_MIN_DEG = 7.0   # a partir daqui a inclinação confirma o itálico
 MIN_CONTRAST = 0.15    # perfil mais achatado que isso (1 − mín/máx): palavra sem hastes, sem medida
 
 _ANGLES = np.arange(-15.0, 25.0 + 0.25, 0.5)   # cisalhamentos testados (graus; > 0 = topo à direita)
-_SUB = 4              # a projeção é feita em passos de 1/_SUB px
 _GAP = 0.22           # lacuna mínima entre palavras, em alturas de linha
 _VTOL = 0.08          # tinta até esta fração da altura acima/abaixo ainda conta como vizinha
 _MARK = 0.4           # pedaço com até esta largura (em alturas de linha) é pontuação/sinal
-_SKEW_MAX = 5.0       # maior inclinação de página procurada (graus)
-_SKEW_PIXELS = 50_000  # amostra de tinta usada para medir a inclinação da página
 
 
 @dataclass
@@ -51,16 +48,10 @@ def word_boxes(mask: np.ndarray, bbox: tuple[float, float, float, float]) -> lis
     h, w = mask.shape
     x1, x2, y1, y2 = max(x1, 0), min(x2, w), max(y1, 0), min(y2, h)
     region = mask[y1:y2, x1:x2]
-    ys, xs = np.nonzero(region)
-    if ys.size == 0:
+    if not region.any():
         return []
 
-    tan = math.tan(math.radians(_skew_deg(xs, ys)))
-    shift = np.rint(np.arange(region.shape[1]) * tan).astype(np.int64)   # quanto cada coluna desce
-    offset = int(shift.max())   # nenhuma linha endireitada fica acima do topo
-    straight = np.zeros((region.shape[0] + offset - int(shift.min()), region.shape[1]), dtype=bool)
-    straight[ys - shift[xs] + offset, xs] = True
-
+    straight, shift, offset, _ = straighten(region)
     lines = line_spans(straight)
     if not lines:
         return []
@@ -101,42 +92,10 @@ def slant_deg(mask: np.ndarray, box: WordBox, baseline: float = 0.0) -> float | 
     ys, xs = np.nonzero(mask[max(box.y1, 0):box.y2, max(box.x1, 0):box.x2])
     if ys.size < 30:
         return None
-    scores = _projection_scores(xs, ys, _ANGLES)
+    scores = projection_scores(xs, ys, _ANGLES)
     if 1 - scores.min() / scores.max() < MIN_CONTRAST:
         return None
     return float(_ANGLES[np.argmax(scores)]) - baseline
-
-
-def _projection_scores(pos: np.ndarray, other: np.ndarray, angles: np.ndarray) -> np.ndarray:
-    """Σ p² da projeção de `pos` deslocado de (other − média)·tan(ângulo), para cada ângulo.
-
-    Cada pixel conta como um quadrado de 1 px (projeção em passos de 1/_SUB px somada numa janela de
-    1 px). Arredondar para o pixel inteiro faria os ângulos pequenos (deslocamento < 0,5 px numa
-    palavra de 15–30 px de altura) empatarem com o zero, e o pico ficaria serrilhado.
-    """
-    t = np.tan(np.radians(angles))[:, None]
-    bins = np.floor((pos + (other - other.mean()) * t) * _SUB).astype(np.int64)
-    bins -= bins.min()
-    width = int(bins.max()) + 1 + _SUB
-    counts = np.bincount((bins + np.arange(len(angles))[:, None] * width).ravel(),
-                         minlength=len(angles) * width).reshape(len(angles), width)
-    cum = np.cumsum(counts, axis=1)
-    proj = cum.copy()
-    proj[:, _SUB:] -= cum[:, :-_SUB]
-    return (proj.astype(np.float64) ** 2).sum(axis=1)
-
-
-def _skew_deg(xs: np.ndarray, ys: np.ndarray) -> float:
-    """Inclinação das linhas do bloco (graus; > 0 = descem para a direita): o ângulo que mais
-    concentra a projeção horizontal da tinta. Busca grossa (±5°, passo 0,5°) e fina (±0,5°, 0,05°)."""
-    step = max(1, ys.size // _SKEW_PIXELS)
-    xs, ys = xs[::step], ys[::step]
-    best = 0.0
-    for span, delta in ((_SKEW_MAX, 0.5), (0.5, 0.05)):
-        angles = best + np.arange(-span, span + delta / 2, delta)
-        # y' = y − (x − x̄)·tan(a) deixa horizontal uma linha que desce com inclinação a
-        best = float(angles[np.argmax(_projection_scores(ys, xs, -angles))])
-    return best
 
 
 def _words(band: np.ndarray, height: float) -> list[tuple[int, int]]:
