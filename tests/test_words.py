@@ -55,3 +55,8 @@ def test_apply_flags_missing_flags():
 def test_has_math():
     assert has_math([Span("a"), Span("x", math=True)])
     assert not has_math([Span("a")])
+
+
+def test_italic_flags_ignore_trailing_punctuation():
+    assert italic_flags(inline.parse_flat("*Por isso*, precisavam")) == [True, True, False]
+    assert italic_flags(inline.parse_flat("*publi*cado")) == [False]

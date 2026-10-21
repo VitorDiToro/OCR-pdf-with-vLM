@@ -74,3 +74,11 @@ def test_question_and_max_tokens():
     assert PROMPT_VERSION == 1
     assert question.endswith("Transcription:\na b")
     assert max_tokens == len("a b") // 2 + 128
+
+
+def test_punctuation_outside_marks_keeps_italic():
+    toks = ["Por", "isso,", "precisavam"]
+    out = mark_italics(FakeEngine([], answers=["<i>Por isso</i>, precisavam"]), Image.new("L", (9, 9)), toks)
+    assert out == [True, True, False]
+    out = mark_italics(FakeEngine([], answers=["<i>publi</i>cado"]), Image.new("L", (9, 9)), ["publicado"])
+    assert out == [False]

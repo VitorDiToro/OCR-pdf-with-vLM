@@ -37,14 +37,17 @@ def tokens(spans: list[Span]) -> list[str]:
 
 
 def italic_flags(spans: list[Span]) -> list[bool]:
-    """Token é itálico se todo caractere não sobrescrito dele está em span itálico."""
+    """Token é itálico se todo caractere alfanumérico não sobrescrito dele está em span itálico
+    (sem nenhum, todo caractere não sobrescrito)."""
     chars = _chars(spans)
     flags = []
     for a, b in _token_ranges(chars):
         body = [spans[i].italic for _, i, _ in chars[a:b] if not spans[i].sup]
         # token só de sobrescrito (ex.: "1" solto): vale o estilo dele mesmo
         body = body or [spans[i].italic for _, i, _ in chars[a:b]]
-        flags.append(all(body))
+        # o itálico costuma parar antes da pontuação ("*Por isso*,"): vale o das letras e dígitos
+        alnum = [spans[i].italic for c, i, _ in chars[a:b] if c.isalnum() and not spans[i].sup]
+        flags.append(all(alnum) if alnum else all(body))
     return flags
 
 

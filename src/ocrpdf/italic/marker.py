@@ -76,4 +76,6 @@ def mark_italics(engine: OcrEngine, crop: Image.Image, tokens: list[str]) -> lis
         words.pop()
     if ["".join(c for c, _ in w) for w in words] != tokens:
         return None
-    return [all(italic for _, italic in w) for w in words]
+    # o itálico costuma parar antes da pontuação: vale o das letras e dígitos
+    return [all(italic for c, italic in w if c.isalnum()) if any(c.isalnum() for c, _ in w)
+            else all(italic for _, italic in w) for w in words]
