@@ -45,6 +45,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--rule", choices=["r1", "r2", "ambas"], default="ambas")
     ap.add_argument("--dpi", type=int, default=200)
     args = ap.parse_args(argv)
+    # o Pipeline criaria pastas num --work digitado errado; as medidas da probe são regravadas no cache,
+    # como em toda execução do ocrpdf (o cache guarda o OCR; as medidas saem sempre da imagem)
+    if not (args.work / "pages").is_dir():
+        ap.error(f"{args.work} não tem pages/: rode antes `ocrpdf analyze {args.pdf} -w {args.work}`")
 
     doc = pdfium.PdfDocument(str(args.pdf))
     total = len(doc)

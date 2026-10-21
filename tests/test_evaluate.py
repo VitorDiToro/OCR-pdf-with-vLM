@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import importlib.util
+from pathlib import Path
+
+import pytest
+
 from ocrpdf.italic.evaluate import (Score, gold_flags, is_italic_font, normalize, page_tokens, parse_pages,
                                     project, reference_tokens, score)
 from ocrpdf.italic.stage import BlockEvidence, final_flags
@@ -144,3 +149,15 @@ def test_slant_rule_measure_decides_and_dots_fills_gaps():
     ev = BlockEvidence(0, ["a", "b", "c", "d"], [True, False, True, False], [1.0, 9.0, None, None],
                        model=[True, True, False, True])
     assert final_flags(ev, "slant") == [False, True, True, False]
+
+
+def test_eval_script_refuses_work_dir_without_cache(tmp_path, capsys):
+    # --work errado: avisa e sai, sem criar pastas nem gravar nada
+    path = Path(__file__).resolve().parents[1] / "scripts" / "eval_italic.py"
+    spec = importlib.util.spec_from_file_location("eval_italic", path)
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
+    with pytest.raises(SystemExit) as exit_:
+        script.main(["--pdf", "in.pdf", "--work", str(tmp_path / "w"), "--gold", "g.json"])
+    assert exit_.value.code == 2 and "pages/" in capsys.readouterr().err
+    assert not (tmp_path / "w").exists()
