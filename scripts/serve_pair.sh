@@ -27,7 +27,15 @@ cleanup() {
         # cada servidor é líder do próprio grupo (setsid): o sinal vai ao grupo inteiro
         kill -INT -- "-${pid}" 2>/dev/null || true
     done
+    # vLLM preso no encerramento (EngineCore em NCCL/CUDA) não pode prender o terminal nem a GPU:
+    # o vigia manda SIGKILL ao grupo depois de STOP_TIMEOUT s (padrão 60)
+    ( sleep "${STOP_TIMEOUT:-60}"
+      for pid in "${PIDS[@]}"; do kill -KILL -- "-${pid}" 2>/dev/null || true; done ) &
+    local guard=$!
     for pid in "${PIDS[@]}"; do wait "${pid}" 2>/dev/null || true; done
+    kill "${guard}" 2>/dev/null || true
+    # processos do grupo que sobreviveram ao líder (o vLLM cria processos de trabalho)
+    for pid in "${PIDS[@]}"; do kill -KILL -- "-${pid}" 2>/dev/null || true; done
 }
 trap cleanup EXIT
 trap 'echo "Encerrando os servidores..." >&2; exit 130' INT TERM
