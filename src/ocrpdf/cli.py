@@ -26,10 +26,15 @@ def main(argv: list[str] | None = None) -> int:
 
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="ocrpdf", description="PDF escaneado → PDF com texto real.")
-    p.add_argument("-v", "--verbose", action="store_true")
+    p.add_argument("-v", "--verbose", action="store_true", help="mostra o progresso (logging INFO)")
     sub = p.add_subparsers(required=True)
 
-    ocr = argparse.ArgumentParser(add_help=False)
+    # -v também depois do subcomando; SUPPRESS impede que o padrão do subparser apague o -v global.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("-v", "--verbose", action="store_true", default=argparse.SUPPRESS,
+                        help="mostra o progresso (logging INFO)")
+
+    ocr = argparse.ArgumentParser(add_help=False, parents=[common])
     ocr.add_argument("input", type=Path, help="PDF escaneado")
     ocr.add_argument("-w", "--work-dir", type=Path, help="pasta de trabalho (padrão: <saída>_work)")
     ocr.add_argument("--server", default="http://localhost:8000/v1", help="URL da API OpenAI-compatível")
@@ -50,7 +55,7 @@ def _parser() -> argparse.ArgumentParser:
     ana = sub.add_parser("analyze", parents=[ocr], help="só OCR e montagem do document.json")
     ana.set_defaults(func=_analyze)
 
-    ren = sub.add_parser("render", help="renderiza um document.json")
+    ren = sub.add_parser("render", parents=[common], help="renderiza um document.json")
     ren.add_argument("document", type=Path)
     ren.add_argument("-o", "--output", type=Path, required=True)
     ren.add_argument("--no-header", action="store_true")
