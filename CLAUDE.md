@@ -44,6 +44,9 @@ uv run ocrpdf render work/document.json -o out.pdf   # re-renderiza após editar
 Opções relevantes: `--preset dots|qwen25vl|qwen3vl`, `--server`, `--model`, `--dpi 200`,
 `--pages "1-3,7"`, `--workers 4`, `--font auto|serif|sans|mono|<família>`, `--lang pt-BR`,
 `--force` (ignora cache), `--no-header`.
+Formato de saída (`convert` e `render`; só na renderização, o `document.json` fica no original):
+`--page-size original|a4|<L>x<A>` (cm, aceita vírgula), `--margin 2.5` (cm; só com tamanho
+diferente de `original`), `--font-size PT` (escala corpo, títulos, notas e cabeçalho).
 
 Pasta de trabalho (padrão `<saída>_work/`): `pages/page_NNNN.json` (cache bruto por página),
 `assets/` (recortes de figuras), `meta.json` (fonte detectada), `document.json`, `document.html`.

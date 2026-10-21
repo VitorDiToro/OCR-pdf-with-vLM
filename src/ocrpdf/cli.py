@@ -14,6 +14,7 @@ from pathlib import Path
 
 from .model import Document
 from .ocr.vlm import PRESETS, VlmEngine
+from .output_format import apply_output_format, parse_page_size
 from .pipeline import Pipeline
 from .render import render_pdf
 
@@ -50,6 +51,7 @@ def _parser() -> argparse.ArgumentParser:
     conv = sub.add_parser("convert", parents=[ocr], help="OCR + renderização")
     conv.add_argument("-o", "--output", type=Path, help="PDF de saída (padrão: <entrada>_ocr.pdf)")
     conv.add_argument("--no-header", action="store_true", help="omite o cabeçalho corrente")
+    _add_format_options(conv)
     conv.set_defaults(func=_convert)
 
     ana = sub.add_parser("analyze", parents=[ocr], help="só OCR e montagem do document.json")
@@ -59,8 +61,28 @@ def _parser() -> argparse.ArgumentParser:
     ren.add_argument("document", type=Path)
     ren.add_argument("-o", "--output", type=Path, required=True)
     ren.add_argument("--no-header", action="store_true")
+    _add_format_options(ren)
     ren.set_defaults(func=_render)
     return p
+
+
+def _add_format_options(p: argparse.ArgumentParser) -> None:
+    """Formato de saída (só na renderização; o document.json guarda o formato original)."""
+    p.add_argument("--page-size", type=parse_page_size, default=None, metavar="TAMANHO",
+                   help="original (padrão) | a4 | <largura>x<altura> em cm, ex.: 17,6x25")
+    p.add_argument("--margin", type=float, default=2.5,
+                   help="margens em cm (padrão 2,5); só vale quando --page-size não é original")
+    p.add_argument("--font-size", type=float, default=None, metavar="PT",
+                   help="tamanho do corpo em pt; títulos, notas e cabeçalho escalam junto (padrão: o medido)")
+
+
+def _formatted(args, doc: Document) -> Document | None:
+    """Aplica as opções de formato; em caso de valor inválido, avisa e devolve None."""
+    try:
+        return apply_output_format(doc, args.page_size, args.margin, args.font_size)
+    except ValueError as e:
+        print(f"ocrpdf: erro: {e}", file=sys.stderr)
+        return None
 
 
 def _work_dir(args, output: Path | None) -> Path:
@@ -82,6 +104,8 @@ def _convert(args) -> int:
     doc = _run_analysis(args, work)
     if args.no_header:
         doc.running_header = ""
+    if (doc := _formatted(args, doc)) is None:
+        return 2
     render_pdf(doc, output, base_dir=work, html_out=work / "document.html")
     print(f"{output}  (intermediário: {work / 'document.json'})")
     return 0
@@ -98,6 +122,8 @@ def _render(args) -> int:
     doc = Document.load(args.document)
     if args.no_header:
         doc.running_header = ""
+    if (doc := _formatted(args, doc)) is None:
+        return 2
     render_pdf(doc, args.output, base_dir=args.document.parent, html_out=args.document.with_suffix(".html"))
     print(args.output)
     return 0
