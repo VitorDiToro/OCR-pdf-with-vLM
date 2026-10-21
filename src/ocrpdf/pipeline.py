@@ -20,6 +20,7 @@ from .ocr.base import OcrEngine, PageLayout, Region
 log = logging.getLogger(__name__)
 
 _MEASURED = {"text", "title", "section-header", "list-item", "caption", "footnote", "page-header", "page-footer"}
+_RULED = {"title", "section-header"}   # categorias em que se procuram filetes colados
 _FONT_QUESTION = (
     "Look at the main body text of this page. Is its typeface serif or sans-serif? "
     "Answer with exactly one word: serif or sans."
@@ -111,9 +112,9 @@ class Pipeline:
         for n, r in enumerate(layout.regions):
             if r.category in _MEASURED:
                 r.metrics = probe.measure(mask, r.bbox)
-            if r.category in ("title", "section-header"):
-                r.rules = probe.find_rules(mask, r.bbox)
-            elif r.category == "picture":
+            # zera também as demais categorias: o cache pode trazer filetes de outra versão
+            r.rules = probe.find_rules(mask, r.bbox) if r.category in _RULED else []
+            if r.category == "picture":
                 name = f"assets/p{layout.index + 1:04d}_fig{n:02d}.png"
                 image.crop(tuple(int(v) for v in r.bbox)).save(self.work / name)
                 r.image = name
