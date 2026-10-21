@@ -73,9 +73,10 @@ src/ocrpdf/
                   Protocol OcrEngine { analyze(image), ask(image, q) }
   ocr/vlm.py      VlmEngine (httpx → /chat/completions), PRESETS, smart_resize, parse_layout
                   (tira cercas ```json, recupera objetos de JSON truncado), reescala bbox.
-  probe.py        heurísticas numpy sobre a imagem do bloco: Otsu, perfil de projeção →
-                  nº de linhas, entrelinha, ascent (topo→linha de base), recuo 1ª linha, alinhamento;
-                  find_rules: filetes colados acima/abaixo de títulos (o VLM não os reporta).
+  probe.py        heurísticas numpy sobre a imagem do bloco: Otsu, bloco endireitado (straighten,
+                  skew_deg), perfil de projeção → nº de linhas, entrelinha, ascent (topo→linha de
+                  base), recuo 1ª linha, alinhamento; find_rules: filetes colados acima/abaixo de
+                  títulos (o VLM não os reporta).
   inline.py       Markdown inline → list[Span] (markdown-it-py + dollarmath): *it*, **b**, <sup>,
                   <sub>, $^{1}$ → sup, $…$ → math, ¹²³ → sup; escapa "1." e "-" iniciais para
                   não virarem lista.
@@ -127,6 +128,12 @@ scripts/          serve_vllm.sh (um servidor; GPU_MEM pela VRAM livre; MAX_IMAGE
 - **Tamanho de fonte** = ascent_px / 0,72 (altura de maiúsculas/ascendentes por em). Medir pela
   altura total da tinta subestimava títulos sem descendentes ("Primeira Versão"). Filetes
   (altura ≤ 4 px e > 50% da largura) são descartados antes.
+- **Página torta** (~1° é comum): `probe.measure` endireita o bloco antes de separar as linhas
+  (cisalhamento vertical pelo ângulo que mais concentra a projeção horizontal) e desconta o
+  deslocamento horizontal da margem linha a linha. Sem isso, as linhas de um bloco largo se
+  encostavam e o bloco virava uma "linha" de ~1000 px (fonte de 95–376 pt; Horkheimer com 1613
+  páginas). Faixa baixa (< 0,6 da típica) na 1ª/última posição com tinta na borda do recorte é
+  pedaço da linha vizinha (bbox do dots sobreposto) e é descartada.
 - Corpo = mediana ponderada por linhas dos blocos `text` com ≥ 3 linhas; entrelinha = pitch/font.
 - Espaço entre parágrafos = mediana das lacunas − entrelinha extra.
 - Margens: mediana das extremidades do conteúdo; a inferior usa o 1º quartil (páginas cheias).
@@ -215,6 +222,10 @@ Feito e conferido:
   cobertura da regra `slant`: Benjamin 99,4/89,2 (dots 100/46,1); Althusser 97,6/100 (dots
   100/97,5; referência 92,5/92,5); Horkheimer 98,6/92,2 (dots 99,3/90,8; referência 98,2/71,2).
   O 2º modelo (Qwen3-VL 8B-AWQ e 4B-FP8) quase não marca: R1 0,5–60% de cobertura.
+- **Livros reais** (2026-10-21, Althusser e Horkheimer, páginas ~1° tortas): depois da correção da
+  probe, Althusser (`--pages 5-10`) sai com 6 páginas para 6 escaneadas, mesmas quebras de linha
+  quase todas; Horkheimer (`--pages 5-49`) com 44 para 45. Fonte serifada detectada nos dois.
+  Comparações lado a lado em `amostras/comparacao/` (fora do git).
 - **VRAM e desktop**: com dois servidores no ar (dots dormindo + 2º modelo), sobram ~0,5 GiB para a
   interface; numa execução assim o gnome-shell caiu e encerrou a sessão (servidores e Claude Code
   juntos). Só com um servidor, sem problema.
@@ -223,13 +234,12 @@ Ainda não exercitado: ziamath inline, colunas, tabelas, figuras, presets `qwen2
 
 ## Próximos passos
 
-1. **Páginas inclinadas** (bloqueia documentos reais): `probe.measure` separa as linhas pela
-   projeção horizontal e exige uma linha de pixels sem tinta entre elas. Com ~1° de inclinação
-   (Horkheimer, Althusser), blocos largos viram uma "linha" só e a fonte medida chega a 95–376 pt:
-   o Horkheimer (49 páginas) sai com 1613. Endireitando o recorte em −1°, o mesmo bloco (p. 8,
-   bbox [148,178,1204,1193]) dá 27 linhas. `italic/slant.py` já endireita o bloco antes de achar
-   as linhas; reaproveitar na probe. Depois, comparar visualmente com as referências
-   (`pdftoppm -r 60`), passo 7 da Task 10 do plano do itálico.
+1. Pendências da verificação de ponta a ponta (detalhes em
+   docs/superpowers/reports/2026-10-21-italico-avaliacao.md):
+   - Capa/logotipo (Althusser p. 1 e 3): haste de letra decorativa atravessa as linhas e o título
+     sai com 376 pt. Limite de plausibilidade (fonte × largura do bbox × nº de caracteres).
+   - `meta.json` sem versão da pergunta da fonte: mudar a pergunta não invalida o cache.
+   - `probe.find_rules` não endireita o bloco (filete em página torta).
 2. **Testes** restantes: `test_inline.py`, `test_notes.py` (split_label, link por página,
    endnotes, `[n]`, `*`), `test_vlm.py` com `httpx.MockTransport` (cerca, JSON truncado, escala
    pixels/norm1000), `test_assemble.py` com PageLayouts sintéticos (cabeçalho corrente, junção
