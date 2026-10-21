@@ -131,7 +131,9 @@ ou o prompt do 2º passo. `--force` refaz as duas etapas.
 Por medição contra os gabaritos, **priorizando precisão; tempo não pesa** (decisão 9). Incluir
 entre os candidatos o maior que caiba sozinho na 3060 (ex.: Qwen3-VL-8B em FP8 ou 4 bits;
 Qwen3-VL-4B como referência menor; disponibilidade a verificar). O modo C limita os pesos a
-~6–8 GB pela RAM: **se o mais preciso só couber no modo A, voltar ao usuário com os números**.
+~6–8 GB pela RAM. **Se o mais preciso só funcionar bem no modo A nesta 3060, avisar o usuário
+com os números, sem descartar nada**: o modelo mais preciso e os dois modos continuam no
+projeto, porque o usuário vai validar depois em outra máquina.
 
 ## Execução na GPU
 
@@ -159,6 +161,11 @@ Documentos (em `/home/vitor/Amostras`, fora do repositório):
 | Horkheimer, *Teoria tradicional e teoria crítica* | 49 págs (copiadora Canon), serifada, levemente torta | 45 págs, pdfTeX | itálico em palavras isoladas (*lógos*, *práxis*), notas |
 | Althusser, *Ler O Capital* | 10 págs, serifada | 5 págs, pdfTeX | muito itálico em palavras/expressões soltas, citação em bloco |
 
+- As conversões de referência **omitem de propósito** folha de rosto, índice e o que não é o
+  texto propriamente dito (as ferramentas permitiam escolher as páginas); por isso têm menos
+  páginas, e em outro formato (A4). A comparação usa só o conteúdo presente na referência,
+  casado com o escaneado **pelo texto**, não pelo número da página; a conversão pelo `ocrpdf`
+  usa `--pages` com as páginas de texto correspondentes.
 - Gabaritos: Benjamin marcado a partir das imagens; Horkheimer e Althusser com rascunho
   extraído **da união** do itálico da conversão de referência (fontes `SFTI…` = itálico) com a
   marcação a partir das imagens, para não herdar só os erros da referência. O usuário revisa
