@@ -135,6 +135,27 @@ Qwen3-VL-4B como referência menor; disponibilidade a verificar). O modo C limit
 com os números, sem descartar nada**: o modelo mais preciso e os dois modos continuam no
 projeto, porque o usuário vai validar depois em outra máquina.
 
+## Formato de saída (página e fonte)
+
+Hoje o PDF gerado já usa o tamanho da página escaneada, com margens e fontes medidas (Benjamin:
+Letter; Horkheimer: 481×679 pt; Althusser: 389×575 pt). Novas opções, no `convert` e no
+`render` (aplicadas na renderização; o `document.json` guarda sempre o formato original medido,
+de modo que as variantes saem do mesmo JSON sem refazer o OCR):
+
+- `--page-size original|a4|<largura>x<altura>` — padrão `original`; dimensões em **cm**
+  (ex.: `17.6x25` para B5; aceita vírgula decimal). Fora de 5–100 cm → erro claro.
+- `--margin <cm>` — margens quando o tamanho não é `original`; padrão 2,5 cm. *(Decisão do
+  Claude.)*
+- `--font-size <pt>` — tamanho do corpo; escala proporcionalmente títulos, notas e cabeçalho.
+  Padrão: o medido. (As referências do Horkheimer/Althusser usam 12 pt em A4.)
+
+Consequências: o filete do título (Item 4) guarda a extensão **relativa à área de texto**, não
+em pt absolutos; figuras ficam limitadas à largura útil. Recuos (em `em`), notas e cabeçalho
+já se adaptam.
+
+Fora deste design: casar a **paginação** com o livro (p. 124 do livro = p. 124 do PDF). Mesmo em
+`original`, as quebras de página são do WeasyPrint.
+
 ## Execução na GPU
 
 - **Modo C (padrão):** um script sobe o par uma vez por sessão (dots primeiro, faz dormir, depois
@@ -192,8 +213,10 @@ Documentos (em `/home/vitor/Amostras`, fora do repositório):
   (teste sintético).
 - Modo C: um `ocrpdf convert` com o par no ar roda as duas etapas sem intervenção; modo A roda
   sem servidor prévio.
+- `--page-size`/`--margin`/`--font-size`: o PDF sai com o tamanho e as margens pedidos (conferido
+  pelo `mediabox` com pypdf) e o corpo no tamanho pedido; notas continuam na página da chamada.
 - Testes existentes passam; testes novos para alinhamento, filete, validação "texto idêntico",
-  trocador (com transporte HTTP falso) e avaliação.
+  trocador (com transporte HTTP falso), formato de saída e avaliação.
 
 ## Deixado ao implementador
 
