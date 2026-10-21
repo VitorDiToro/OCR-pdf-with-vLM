@@ -52,7 +52,8 @@ servidor; `--italic-server`, `--italic-model`, `--italic-hf-model`); `--no-itali
 sem conferir na imagem.
 Formato de saída (`convert` e `render`; só na renderização, o `document.json` fica no original):
 `--page-size original|a4|<L>x<A>` (cm, aceita vírgula), `--margin 2.5` (cm; só com tamanho
-diferente de `original`), `--font-size PT` (escala corpo, títulos, notas e cabeçalho).
+diferente de `original`), `--font-size PT` (escala corpo, títulos, notas e cabeçalho). Em `--margin`
+e `--font-size` o decimal é com **ponto** (decisão do usuário; está na ajuda).
 
 Pasta de trabalho (padrão `<saída>_work/`): `pages/page_NNNN.json` (por página: OCR em cache +
 medidas da probe regravadas a cada execução), `assets/` (recortes de figuras), `meta.json` (fonte
@@ -132,8 +133,12 @@ scripts/          serve_vllm.sh (um servidor; GPU_MEM pela VRAM livre; MAX_IMAGE
   (cisalhamento vertical pelo ângulo que mais concentra a projeção horizontal) e desconta o
   deslocamento horizontal da margem linha a linha. Sem isso, as linhas de um bloco largo se
   encostavam e o bloco virava uma "linha" de ~1000 px (fonte de 95–376 pt; Horkheimer com 1613
-  páginas). Faixa baixa (< 0,6 da típica) na 1ª/última posição com tinta na borda do recorte é
-  pedaço da linha vizinha (bbox do dots sobreposto) e é descartada.
+  páginas).
+- **bbox sobreposto** (o dots às vezes sobe/desce ~15 px na linha do bloco vizinho): o pipeline
+  passa à probe quantos px do topo/base também estão no bbox de um vizinho da mesma coluna
+  (`pipeline._overlaps`); a 1ª/última linha cuja tinta, no recorte original, fica toda nessa faixa
+  (menor que uma linha) é a do vizinho e não conta. Medir no recorte original, não no endireitado,
+  é o que funciona em página torta; e sem vizinho sobreposto nada é descartado ("anos." fica).
 - Corpo = mediana ponderada por linhas dos blocos `text` com ≥ 3 linhas; entrelinha = pitch/font.
 - Espaço entre parágrafos = mediana das lacunas − entrelinha extra.
 - Margens: mediana das extremidades do conteúdo; a inferior usa o 1º quartil (páginas cheias).
@@ -148,7 +153,10 @@ scripts/          serve_vllm.sh (um servidor; GPU_MEM pela VRAM livre; MAX_IMAGE
   acima/abaixo do bbox, com o trecho de maior sobreposição com o bbox (≥ 50% da largura),
   comprimento ≥ 10% da página e ≥ 3× a altura da linha, e ≥ 1 linha em branco até a tinta
   (exclui serifas). `Rule` guarda extensão relativa à área de texto (`left_em` no em do corpo,
-  `right_frac`); o render desenha um `div.rule` próprio antes/depois do título.
+  `right_frac`); o render desenha um `div.rule` próprio antes/depois do título. Filete achado por
+  dois títulos vizinhos (abaixo de um, acima do outro) fica com o mais perto
+  (`pipeline._drop_shared_rules`). Bloco de coluna (`full_width=False`) não leva filete: a geometria
+  é da área da página e ele é desenhado dentro de `div.cols` (TODO: geometria por coluna).
 - Títulos: níveis por faixas de tamanho (diferenças < 1 pt = mesmo nível); title = h1.
 - Parágrafo continua da página/coluna anterior se o anterior não termina em pontuação final
   **ou** o novo começa com minúscula, e o novo não tem recuo de 1ª linha; desfaz hifenização.
@@ -239,7 +247,13 @@ Ainda não exercitado: ziamath inline, colunas, tabelas, figuras, presets `qwen2
    - Capa/logotipo (Althusser p. 1 e 3): haste de letra decorativa atravessa as linhas e o título
      sai com 376 pt. Limite de plausibilidade (fonte × largura do bbox × nº de caracteres).
    - `meta.json` sem versão da pergunta da fonte: mudar a pergunta não invalida o cache.
-   - `probe.find_rules` não endireita o bloco (filete em página torta).
+   - `probe.find_rules` não endireita o bloco (filete em página torta). A inclinação segue por
+     bloco, não por página (decidido na revisão do PR #1: acompanha a curvatura perto da lombada).
+   - Limiares da inclinação em pixels (`slant_deg` exige ≥ 30 px de tinta; tudo medido a 200 dpi:
+     em 100–150 dpi há menos medidas) e calibração em só 3 documentos em português. Testar um 4º
+     documento (corpo ≤ 9 pt, ou itálico oblíquo sintético) antes de confiar na regra fora disso.
+   - Herança de palavra curta na regra `slant` (revisão do PR #1): Benjamin pares 89,2 → 98,4 de
+     cobertura, mas a precisão do Horkheimer cai para 96,6 (< 98,2 da referência). Não adotada.
 2. **Testes** restantes: `test_inline.py`, `test_notes.py` (split_label, link por página,
    endnotes, `[n]`, `*`), `test_vlm.py` com `httpx.MockTransport` (cerca, JSON truncado, escala
    pixels/norm1000), `test_assemble.py` com PageLayouts sintéticos (cabeçalho corrente, junção

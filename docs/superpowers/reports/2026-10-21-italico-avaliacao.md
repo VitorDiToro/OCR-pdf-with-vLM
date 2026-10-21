@@ -94,7 +94,9 @@ não houve falha. Com a regra `slant` o par não é mais necessário.
   tinta entre elas. Com ~1° de inclinação, blocos largos viravam uma "linha" só e a fonte medida
   chegava a 95–376 pt: o Horkheimer saía com 1613 páginas. Agora a probe endireita o bloco,
   desconta o deslocamento horizontal da margem e descarta o pedaço de linha vizinha que um bbox
-  sobreposto corta na borda. Horkheimer: 62 de 65 parágrafos justificados, 55 com recuo.
+  sobreposto corta na borda (na revisão do PR #1, essa decisão passou a usar a faixa sobreposta
+  com o bbox do vizinho, medida no recorte original). Horkheimer: 63 de 65 parágrafos
+  justificados, 56 com recuo.
 - **Fonte em cache da pergunta antiga**: as `meta.json` dos três documentos eram anteriores à
   pergunta que descreve as serifas (`fc1de27`) e diziam `sans`. Refeita pelo pipeline: Benjamin
   sans (4×1), Althusser serif (4×1), Horkheimer serif (5×0).
@@ -122,3 +124,7 @@ referências). As imagens ficam em `amostras/comparacao/` (fora do git: são pá
 - `meta.json` não sabe com que pergunta a fonte foi detectada; mudar a pergunta não invalida o
   cache (guardar uma versão, como o `PROMPT_VERSION` das marcas).
 - `probe.find_rules` não endireita o bloco: um filete numa página torta pode não ser achado.
+- Herança de palavra curta na regra `slant` (sugerida na revisão do PR #1), páginas pares P/C:
+  Benjamin 99,5/98,4 (era 99,4/89,2), Althusser 95,2/100 (era 97,6/100), Horkheimer 96,6/92,2 (era
+  98,6/92,2; a referência tem 98,2 de precisão). Não adotada: viola o critério no Horkheimer.
+- Limiares em pixels e calibração em 3 documentos: ver CLAUDE.md (Próximos passos).

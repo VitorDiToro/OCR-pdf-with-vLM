@@ -112,9 +112,9 @@ def _add_format_options(p: argparse.ArgumentParser) -> None:
     p.add_argument("--page-size", type=_page_size_arg, default=None, metavar="TAMANHO",
                    help="original (padrão) | a4 | <largura>x<altura> em cm, ex.: 17,6x25")
     p.add_argument("--margin", type=float, default=2.5,
-                   help="margens em cm (padrão 2,5); só vale quando --page-size não é original")
+                   help="margens em cm, decimal com ponto (padrão 2.5); só vale quando --page-size não é original")
     p.add_argument("--font-size", type=_font_size_arg, default=None, metavar="PT",
-                   help="tamanho do corpo em pt; títulos, notas e cabeçalho escalam junto (padrão: o medido)")
+                   help="tamanho do corpo em pt, decimal com ponto; títulos, notas e cabeçalho escalam junto (padrão: o medido)")
 
 
 def _page_size_arg(spec: str):
