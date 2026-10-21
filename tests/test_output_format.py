@@ -10,7 +10,7 @@ from ocrpdf.model import Block, Document, Rule, Span
 from ocrpdf.output_format import apply_output_format, parse_page_size
 from ocrpdf.render import render_pdf
 from synth import FakeEngine, benjamin_like_page, make_pdf
-from test_render import _doc_with_many_notes, _misplaced
+from test_render import _doc_with_many_notes, _misplaced, _text_positions
 
 
 @pytest.mark.parametrize("spec,expected", [("original", None), ("a4", (595.28, 841.89)),
@@ -65,6 +65,15 @@ def test_a4_and_font_size_in_pdf(tmp_path):
     assert (round(float(box.width), 1), round(float(box.height), 1)) == (595.3, 841.9)
     assert _body_font_size(out) == pytest.approx(12, abs=0.2)
     assert _misplaced(out) == []                       # notas na página da chamada
+
+
+def test_a4_margin_in_pdf(tmp_path):
+    doc = _doc_with_many_notes(spread=60, long_notes=False)
+    doc.notes.clear()                                  # só texto do corpo (as notas vão no @footnote)
+    out = tmp_path / "a4.pdf"
+    render_pdf(apply_output_format(doc, (595.28, 841.89), 2.5), out, base_dir=tmp_path)
+    left_cm = min(x for _, x, _ in _text_positions(out)) * 2.54 / 72
+    assert left_cm == pytest.approx(2.5, abs=0.2)
 
 
 def test_cli_render_with_page_size(tmp_path):
