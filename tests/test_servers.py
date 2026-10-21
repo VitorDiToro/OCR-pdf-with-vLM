@@ -18,11 +18,16 @@ FAKE_SERVE = Path(__file__).parent / "fake_serve.sh"
 ROOTS = {"ocr": "http://127.0.0.1:8000", "italic": "http://127.0.0.1:8001"}
 
 
-def mock_client(calls: list[str], state: dict[str, bool]) -> httpx.Client:
-    """state[porta] = dorme?; registra 'MÉTODO porta /caminho' e atualiza o estado."""
+def mock_client(calls: list[str], state: dict[str, bool | str]) -> httpx.Client:
+    """state[porta] = dorme? (bool), "simples" (sem modo sleep: 404) ou "fora" (conexão recusada);
+    registra 'MÉTODO porta /caminho' das requisições atendidas e atualiza o estado."""
     def handler(req: httpx.Request) -> httpx.Response:
         port = str(req.url.port)
+        if state[port] == "fora":
+            raise httpx.ConnectError("recusado", request=req)
         calls.append(f"{req.method} {port} {req.url.path}")
+        if state[port] == "simples":
+            return httpx.Response(404)
         if req.url.path == "/is_sleeping":
             return httpx.Response(200, json={"is_sleeping": state[port]})
         if req.url.path == "/sleep":
@@ -54,6 +59,35 @@ def test_sleep_switcher_alternates():
 def test_sleep_switcher_reports_missing_server():
     with pytest.raises(RuntimeError, match="serve_pair.sh"):
         SleepSwitcher(ROOTS, client=refusing_client()).use("ocr")
+
+
+def test_sleep_switcher_accepts_plain_ocr_server_alone():
+    # dots do serve_vllm.sh simples (sem /is_sleeping) e nada na 8001: segue sem trocar nada
+    calls, state = [], {"8000": "simples", "8001": "fora"}
+    SleepSwitcher(ROOTS, client=mock_client(calls, state)).use("ocr")
+    assert calls == ["GET 8000 /is_sleeping"]
+
+
+def test_sleep_switcher_wakes_target_and_sleeps_other():
+    # o par como o serve_pair.sh o deixa: dots dormindo, 2º modelo acordado
+    calls, state = [], {"8000": True, "8001": False}
+    SleepSwitcher(ROOTS, client=mock_client(calls, state)).use("ocr")
+    assert calls == ["GET 8000 /is_sleeping", "GET 8001 /is_sleeping",
+                     "POST 8001 /sleep", "POST 8000 /wake_up"]
+    assert state == {"8000": False, "8001": True}
+
+
+def test_sleep_switcher_refuses_other_awake_server_without_sleep_mode():
+    calls, state = [], {"8000": True, "8001": "simples"}
+    with pytest.raises(RuntimeError, match="não cabem na GPU.*serve_pair.sh"):
+        SleepSwitcher(ROOTS, client=mock_client(calls, state)).use("ocr")
+    assert not any(c.startswith("POST") for c in calls)
+
+
+def test_sleep_switcher_unreachable_target_keeps_hint():
+    calls, state = [], {"8000": "simples", "8001": "fora"}
+    with pytest.raises(RuntimeError, match="serve_pair.sh"):
+        SleepSwitcher(ROOTS, client=mock_client(calls, state)).use("italic")
 
 
 def test_sleep_switcher_close_keeps_servers():

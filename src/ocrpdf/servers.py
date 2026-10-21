@@ -39,7 +39,12 @@ class NullSwitcher:
 
 
 class SleepSwitcher:
-    """Alterna servidores já no ar com /sleep e /wake_up. `roots` não inclui /v1."""
+    """Alterna servidores já no ar com /sleep e /wake_up. `roots` não inclui /v1.
+
+    Tolera o que não atrapalha: outro servidor fora do ar não ocupa a GPU (é ignorado) e o
+    servidor pedido sem modo sleep (`/is_sleeping` dá 404, ex.: `serve_vllm.sh` simples) já está
+    acordado. Só não dá para seguir com outro servidor acordado que não sabe dormir.
+    """
 
     def __init__(self, roots: dict[str, str], client: httpx.Client | None = None):
         self.roots = {r: u.rstrip("/") for r, u in roots.items()}
@@ -47,11 +52,25 @@ class SleepSwitcher:
 
     def use(self, role: str) -> None:
         try:
-            sleeping = {r: self._is_sleeping(u) for r, u in self.roots.items()}
+            states = {}
             for r, u in self.roots.items():
-                if r != role and not sleeping[r]:
+                try:
+                    states[r] = self._state(u)
+                except httpx.ConnectError:   # recusada; um timeout não prova que está fora
+                    if r == role:
+                        raise
+                    states[r] = "fora"   # não está no ar: não ocupa a GPU
+            for r, u in self.roots.items():
+                if r != role and states[r] == "simples":
+                    raise RuntimeError(
+                        f"o servidor {r!r} ({u}) está acordado e não tem modo sleep: dois servidores "
+                        "acordados não cabem na GPU. Encerre-o e suba o par com scripts/serve_pair.sh "
+                        "(ou cada servidor com SLEEP_MODE=1 scripts/serve_vllm.sh)"
+                    )
+            for r, u in self.roots.items():
+                if r != role and states[r] == "acordado":
                     self._post(u, "/sleep", params={"level": 1})
-            if sleeping[role]:
+            if states[role] == "dorme":
                 self._post(self.roots[role], "/wake_up")
         except httpx.TransportError as e:
             raise RuntimeError(
@@ -62,10 +81,13 @@ class SleepSwitcher:
         # No modo sleep os servidores sobrevivem entre execuções: nada a derrubar.
         pass
 
-    def _is_sleeping(self, root: str) -> bool:
+    def _state(self, root: str) -> str:
+        """dorme | acordado | simples (sem modo sleep: sempre acordado)."""
         r = self._client.get(f"{root}/is_sleeping")
+        if r.status_code == 404:
+            return "simples"
         r.raise_for_status()
-        return bool(r.json()["is_sleeping"])
+        return "dorme" if r.json()["is_sleeping"] else "acordado"
 
     def _post(self, root: str, path: str, params: dict | None = None) -> None:
         self._client.post(f"{root}{path}", params=params).raise_for_status()

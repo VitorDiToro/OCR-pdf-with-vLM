@@ -19,7 +19,7 @@ from ocrpdf.italic.words import italic_flags, tokens
 from ocrpdf.model import Document, Span
 from ocrpdf.ocr.base import PageLayout, Region
 from ocrpdf.pipeline import ItalicConfig, Pipeline
-from ocrpdf.servers import ITALIC_HF_MODEL, NullSwitcher, RestartSwitcher, SleepSwitcher
+from ocrpdf.servers import ITALIC_HF_MODEL, RestartSwitcher, SleepSwitcher
 from synth import FakeEngine, bbox_of, benjamin_like_page, flat_words, make_pdf, sample_lines, text_image
 
 # palavras 3 e 4 ("Pequena história") impressas em itálico; as demais, normais
@@ -357,19 +357,33 @@ def test_cli_restart_mode_uses_hf_models(tmp_path, monkeypatch):
     assert cli._italic(cli._parser().parse_args(["analyze", "in.pdf", "--no-italic"])) is None
 
 
-def test_cli_no_italic_never_switches(tmp_path, monkeypatch):
-    # sem a etapa 2 basta o servidor do OCR, que pode ser o serve_vllm.sh simples (sem /is_sleeping)
-    for mode in ("sleep", "restart"):
-        args = cli._parser().parse_args(["analyze", "in.pdf", "--no-italic", "--switch", mode])
-        assert isinstance(cli._switcher(args, tmp_path), NullSwitcher)
-    for name in ("SleepSwitcher", "RestartSwitcher"):
-        monkeypatch.setattr(cli, name, lambda *a, **kw: pytest.fail("--no-italic não alterna servidores"))
+def test_cli_no_italic_switchers(tmp_path):
+    args = cli._parser().parse_args(["analyze", "in.pdf", "--no-italic", "--switch", "restart"])
+    restart = cli._switcher(args, tmp_path)
+    assert isinstance(restart, RestartSwitcher)
+    assert restart.models == {"ocr": ("rednote-hilab/dots.mocr", 8000)}   # só sobe o dots
+    sleep = cli._switcher(cli._parser().parse_args(["analyze", "in.pdf", "--no-italic"]), tmp_path)
+    assert isinstance(sleep, SleepSwitcher) and set(sleep.roots) == {"ocr", "italic"}
+
+
+def test_cli_no_italic_with_plain_ocr_server(tmp_path, monkeypatch):
+    # só o dots no ar, do serve_vllm.sh simples (404 em /is_sleeping); nada na 8001
+    calls = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.port == 8001:
+            raise httpx.ConnectError("recusado", request=req)
+        calls.append(f"{req.method} {req.url.port} {req.url.path}")
+        return httpx.Response(404)
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(cli, "SleepSwitcher", lambda roots: SleepSwitcher(roots, client=client))
     image, regions = benjamin_like_page()
     engine = FakeEngine([regions])
     monkeypatch.setattr(cli, "VlmEngine", lambda **kw: engine)
     pdf = make_pdf(tmp_path / "in.pdf", [image])
     assert cli.main(["analyze", str(pdf), "-w", str(tmp_path / "w"), "--no-italic", "--workers", "1"]) == 0
     assert engine.calls == 1 and (tmp_path / "w" / "document.json").exists()
+    assert calls == ["GET 8000 /is_sleeping"]          # nenhum /sleep nem /wake_up
 
 
 def test_cli_reports_server_error_without_traceback(tmp_path, monkeypatch, capsys):
