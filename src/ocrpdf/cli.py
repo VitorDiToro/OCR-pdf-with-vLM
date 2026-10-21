@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import argparse
 import logging
+import signal
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 import httpx
@@ -27,10 +29,26 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING, format="%(levelname)s %(message)s")
     try:
-        return args.func(args)
+        with _signals_exit():
+            return args.func(args)
     except RuntimeError as e:   # servidor fora do ar, que não subiu etc.: a mensagem já diz o que fazer
         print(f"ocrpdf: erro: {e}", file=sys.stderr)
         return 1
+
+
+@contextmanager
+def _signals_exit():
+    """SIGTERM e SIGHUP (kill, terminal fechado) viram SystemExit: os `finally` rodam e o modo restart
+    derruba o servidor que subiu. Sem isso o Python sai direto e o vLLM fica órfão na GPU (ele roda
+    em sessão própria e não recebe o sinal do terminal)."""
+    def leave(signum, frame):
+        raise SystemExit(128 + signum)
+    previous = {sig: signal.signal(sig, leave) for sig in (signal.SIGTERM, signal.SIGHUP)}
+    try:
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 
 def _parser() -> argparse.ArgumentParser:

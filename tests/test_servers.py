@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import signal
 import socket
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -161,6 +164,37 @@ def test_restart_switcher_passes_role_env(tmp_path):
         sw.close()
     assert "MAX_LEN=\n" in (tmp_path / "ocr.log").read_text()
     assert "MAX_LEN=8192\n" in (tmp_path / "italic.log").read_text()
+
+
+_SIGNALED = """
+import sys, time
+from pathlib import Path
+from ocrpdf.cli import _signals_exit
+from ocrpdf.servers import RestartSwitcher
+sw = RestartSwitcher({"ocr": ("m", int(sys.argv[1]))}, Path(sys.argv[2]), Path(sys.argv[3]), ready_timeout=30)
+with _signals_exit():
+    try:
+        sw.use("ocr")
+        print("pronto", flush=True)
+        time.sleep(60)
+    finally:
+        sw.close()
+"""
+
+
+@pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGHUP])
+def test_signal_to_ocrpdf_stops_the_server(tmp_path, sig):
+    # kill, terminal fechado: sem tratar o sinal, o finally não roda e o vLLM fica órfão na GPU
+    port = _free_port()
+    proc = subprocess.Popen([sys.executable, "-c", _SIGNALED, str(port), str(FAKE_SERVE), str(tmp_path)],
+                            stdout=subprocess.PIPE, text=True)
+    try:
+        assert proc.stdout.readline().strip() == "pronto" and _up(port)
+        proc.send_signal(sig)
+        assert proc.wait(timeout=30) == 128 + sig
+        assert _down(port)
+    finally:
+        proc.kill()
 
 
 def test_restart_switcher_reports_dead_process(tmp_path):
