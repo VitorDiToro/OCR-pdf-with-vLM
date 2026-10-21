@@ -74,9 +74,10 @@ def test_cli_render_with_page_size(tmp_path):
     assert (round(float(box.width), 1), round(float(box.height), 1)) == (498.9, 708.7)
 
 
-def test_cli_render_rejects_bad_page_size(tmp_path):
+def test_cli_render_rejects_bad_page_size(tmp_path, capsys):
     src = tmp_path / "document.json"
     Document().save(src)
     with pytest.raises(SystemExit) as e:
         main(["render", str(src), "-o", str(tmp_path / "x.pdf"), "--page-size", "4x10"])
     assert e.value.code == 2
+    assert "tamanho de página fora do intervalo" in capsys.readouterr().err

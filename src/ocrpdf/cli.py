@@ -68,12 +68,20 @@ def _parser() -> argparse.ArgumentParser:
 
 def _add_format_options(p: argparse.ArgumentParser) -> None:
     """Formato de saída (só na renderização; o document.json guarda o formato original)."""
-    p.add_argument("--page-size", type=parse_page_size, default=None, metavar="TAMANHO",
+    p.add_argument("--page-size", type=_page_size_arg, default=None, metavar="TAMANHO",
                    help="original (padrão) | a4 | <largura>x<altura> em cm, ex.: 17,6x25")
     p.add_argument("--margin", type=float, default=2.5,
                    help="margens em cm (padrão 2,5); só vale quando --page-size não é original")
     p.add_argument("--font-size", type=float, default=None, metavar="PT",
                    help="tamanho do corpo em pt; títulos, notas e cabeçalho escalam junto (padrão: o medido)")
+
+
+def _page_size_arg(spec: str):
+    """parse_page_size para o argparse: só ArgumentTypeError mostra a mensagem em português."""
+    try:
+        return parse_page_size(spec)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e)) from None
 
 
 def _formatted(args, doc: Document) -> Document | None:
