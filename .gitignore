@@ -16,5 +16,6 @@ work/
 !exemplo/*.pdf
 !tests/**/*.pdf
 
-# Claude Code (configuração local)
+# Claude Code (configuração local e worktrees)
 .claude/settings.local.json
+.claude/worktrees/
