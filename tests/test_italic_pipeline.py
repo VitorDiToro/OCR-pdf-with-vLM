@@ -467,6 +467,23 @@ def test_cli_no_italic_with_plain_ocr_server(tmp_path, monkeypatch):
     assert calls == ["GET 8000 /is_sleeping"]          # nenhum /sleep nem /wake_up
 
 
+def test_cli_default_rule_with_unrelated_service_on_8001(tmp_path, monkeypatch):
+    # regra padrão (slant), dots simples na 8000 e outro serviço na 8001 que responde 404 a tudo
+    calls = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        calls.append(f"{req.method} {req.url.port} {req.url.path}")
+        return httpx.Response(404)
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    monkeypatch.setattr(cli, "SleepSwitcher", lambda roots: SleepSwitcher(roots, client=client))
+    image, regions = benjamin_like_page()
+    engine = FakeEngine([regions])
+    monkeypatch.setattr(cli, "VlmEngine", lambda **kw: engine)
+    pdf = make_pdf(tmp_path / "in.pdf", [image])
+    assert cli.main(["analyze", str(pdf), "-w", str(tmp_path / "w"), "--workers", "1"]) == 0
+    assert engine.calls == 1 and not any(c.startswith("POST") for c in calls)
+
+
 def test_cli_reports_server_error_without_traceback(tmp_path, monkeypatch, capsys):
     def down(*a, **kw):
         raise RuntimeError("servidor do itálico inacessível; suba o par com scripts/serve_pair.sh")

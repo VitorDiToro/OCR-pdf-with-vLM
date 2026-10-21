@@ -48,7 +48,9 @@ class SleepSwitcher:
 
     Tolera o que não atrapalha: outro servidor fora do ar não ocupa a GPU (é ignorado) e o
     servidor pedido sem modo sleep (`/is_sleeping` dá 404, ex.: `serve_vllm.sh` simples) já está
-    acordado. Só não dá para seguir com outro servidor acordado que não sabe dormir.
+    acordado. Só não dá para **acordar** o pedido com outro servidor acordado que não sabe dormir:
+    os dois disputariam a VRAM. Se o pedido já está acordado, nada muda na GPU, e o outro pode ser
+    até um serviço qualquer que responde 404 na porta.
     """
 
     def __init__(self, roots: dict[str, str], client: httpx.Client | None = None):
@@ -66,7 +68,7 @@ class SleepSwitcher:
                         raise
                     states[r] = "fora"   # não está no ar: não ocupa a GPU
             for r, u in self.roots.items():
-                if r != role and states[r] == "simples":
+                if r != role and states[r] == "simples" and states[role] == "dorme":
                     raise RuntimeError(
                         f"o servidor {r!r} ({u}) está acordado e não tem modo sleep: dois servidores "
                         "acordados não cabem na GPU. Encerre-o e suba o par com scripts/serve_pair.sh "

@@ -84,6 +84,14 @@ def test_sleep_switcher_refuses_other_awake_server_without_sleep_mode():
     assert not any(c.startswith("POST") for c in calls)
 
 
+def test_sleep_switcher_ignores_other_without_sleep_mode_when_target_is_awake():
+    # dots simples (serve_vllm.sh) e outro serviço qualquer na 8001 respondendo 404: nada a acordar,
+    # nada disputa a VRAM por causa da troca; antes, abortava com "acordado e não tem modo sleep"
+    calls, state = [], {"8000": "simples", "8001": "simples"}
+    SleepSwitcher(ROOTS, client=mock_client(calls, state)).use("ocr")
+    assert calls == ["GET 8000 /is_sleeping", "GET 8001 /is_sleeping"]
+
+
 def test_sleep_switcher_unreachable_target_keeps_hint():
     calls, state = [], {"8000": "simples", "8001": "fora"}
     with pytest.raises(RuntimeError, match="serve_pair.sh"):
