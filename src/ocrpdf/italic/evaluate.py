@@ -1,6 +1,11 @@
 """Avaliação do itálico por palavra: gabarito feito à mão e conversão de referência de outra ferramenta.
 
 Gabarito JSON: `{"document": str, "pages": {"<página 1-based do escaneado>": ["trecho em itálico", ...]}}`.
+Um trecho pode ter um intervalo entre colchetes, `"afirma diante do aparelho [sua] humanidade"`: o
+trecho inteiro (sem os colchetes) precisa casar com os tokens da página, mas só os de dentro dos
+colchetes são itálico (útil para uma palavra comum, cuja 1ª ocorrência pode ser romana). Sem colchetes,
+todos os tokens do trecho são itálico.
+
 A referência é um PDF de texto (LaTeX, por exemplo) cujas fontes itálicas se reconhecem pelo nome. Ela
 não tem a mesma paginação do escaneado (omite folha de rosto, outro papel), então é alinhada pelo
 texto, não pelo número da página. As marcas são sempre por token, o mesmo de `words.tokens`.
@@ -43,25 +48,40 @@ def gold_flags(page_tokens: dict[int, list[str]],
                gold: dict[int, list[str]]) -> tuple[dict[int, list[bool]], list[str]]:
     """Marcas do gabarito por página e os trechos não encontrados (`"página: trecho"`).
 
-    Os trechos são buscados na ordem em que foram escritos, a partir do fim do anterior (a mesma
-    sequência de palavras pode se repetir na página); se não houver adiante, procura-se do início.
+    Só as páginas presentes no gabarito entram: lista vazia = anotada sem itálico (pontuada); página
+    ausente = não anotada (fica fora, `score` a ignora). Os trechos de cada página devem estar na ordem
+    de leitura: cada um é buscado a partir do fim do anterior (a mesma sequência pode se repetir) e,
+    se não houver adiante, é dado como não encontrado.
     """
-    flags = {p: [False] * len(toks) for p, toks in page_tokens.items()}
+    flags: dict[int, list[bool]] = {}
     missing: list[str] = []
     for page, phrases in gold.items():
-        norm = [normalize(t) for t in page_tokens.get(page, [])]
+        toks = page_tokens.get(page, [])
+        flags[page] = [False] * len(toks)
+        norm = [normalize(t) for t in toks]
         cursor = 0
         for phrase in phrases:
-            want = [normalize(t) for t in phrase.split()]
+            want, mask = _parse_phrase(phrase)
             at = _find(norm, want, cursor)
-            if at is None:
-                at = _find(norm, want, 0)
             if at is None:
                 missing.append(f"{page}: {phrase}")
                 continue
-            flags[page][at:at + len(want)] = [True] * len(want)
+            flags[page][at:at + len(want)] = mask
             cursor = at + len(want)
     return flags, missing
+
+
+def _parse_phrase(phrase: str) -> tuple[list[str], list[bool]]:
+    """Tokens normalizados do trecho e quais deles são itálico (os de dentro de `[...]`, ou todos)."""
+    want, mask, inside, bracketed = [], [], False, False
+    for raw in phrase.split():
+        if raw.startswith("["):
+            inside = bracketed = True
+        want.append(normalize(raw.strip("[]")))
+        mask.append(inside)
+        if raw.endswith("]"):
+            inside = False
+    return want, mask if bracketed else [True] * len(want)
 
 
 def _find(norm: list[str], want: list[str], start: int) -> int | None:
@@ -148,9 +168,12 @@ class Score:
 
 
 def score(pred: dict[int, list[bool]], gold: dict[int, list[bool]], pages: Iterable[int]) -> Score:
-    """Precisão e cobertura por palavra nas páginas dadas (0,0 quando o denominador é zero)."""
+    """Precisão e cobertura por palavra nas páginas dadas que o gabarito anota (0,0 quando o
+    denominador é zero)."""
     tp = fp = fn = 0
     for page in pages:
+        if page not in gold:
+            continue
         for p, g in zip(pred.get(page, []), gold.get(page, [])):
             tp += p and g
             fp += p and not g

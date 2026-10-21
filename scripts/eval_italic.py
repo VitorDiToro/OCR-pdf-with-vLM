@@ -48,14 +48,16 @@ def main(argv: list[str] | None = None) -> int:
     doc = pdfium.PdfDocument(str(args.pdf))
     total = len(doc)
     doc.close()
-    pages = parse_pages(args.pages, total)
+    raw = json.loads(args.gold.read_text(encoding="utf-8"))
+    gold_pages = {int(p): v for p, v in raw["pages"].items()}
+    # só as páginas anotadas no gabarito são avaliadas (página fora dele não é "sem itálico")
+    pages = [p for p in parse_pages(args.pages, total) if p in gold_pages]
 
     pipe = Pipeline(_NoEngine(), args.work, dpi=args.dpi, italic=ItalicConfig(_NoEngine(), args.italic_model))
     evidence = pipe.collect_evidence(args.pdf)
     toks = page_tokens(evidence)
 
-    raw = json.loads(args.gold.read_text(encoding="utf-8"))
-    gold, missing = gold_flags(toks, {int(p): v for p, v in raw["pages"].items()})
+    gold, missing = gold_flags(toks, gold_pages)
 
     rows = {"dots": page_flags(evidence, lambda ev: ev.dots)}
     for rule in ("r1", "r2") if args.rule == "ambas" else (args.rule,):

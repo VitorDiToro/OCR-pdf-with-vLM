@@ -31,6 +31,32 @@ def test_gold_flags_missing_and_order():
     assert missing == ["1: nada disso"]
 
 
+def test_gold_flags_unannotated_pages_are_not_scored():
+    toks = {1: ["a", "b"], 2: ["c", "d"], 3: ["e"]}
+    gold, missing = gold_flags(toks, {1: ["a"], 2: []})
+    assert set(gold) == {1, 2} and gold[2] == [False, False] and missing == []
+    pred = {1: [True, False], 2: [True, False], 3: [True]}
+    # a página 2 foi anotada sem itálico (fp conta); a 3 não foi anotada (ignorada)
+    s = score(pred, gold, [1, 2, 3])
+    assert (s.tp, s.fp, s.fn) == (1, 1, 0)
+
+
+def test_gold_flags_repeated_phrase_listed_twice_but_present_once():
+    toks = {1: ["x", "y", "z"]}
+    gold, missing = gold_flags(toks, {1: ["x y", "x y"]})
+    assert gold[1] == [True, True, False] and missing == ["1: x y"]
+
+
+def test_gold_phrase_with_bracketed_context():
+    toks = {1: ["a", "sua", "casa", "afirma", "diante", "do", "aparelho", "sua", "humanidade", "x"]}
+    gold, missing = gold_flags(toks, {1: ["afirma diante do aparelho [sua] humanidade"]})
+    assert gold[1] == [False] * 7 + [True, False, False] and missing == []
+    gold, _ = gold_flags(toks, {1: ["aparelho [sua humanidade]"]})
+    assert gold[1] == [False] * 7 + [True, True, False]
+    gold, missing = gold_flags(toks, {1: ["do aparelho [sua] casa"]})
+    assert not any(gold[1]) and missing == ["1: do aparelho [sua] casa"]
+
+
 def test_score_without_predictions():
     s = score({1: [False]}, {1: [True]}, [1])
     assert (s.tp, s.fp, s.fn, s.precision, s.recall) == (0, 0, 1, 0.0, 0.0)
