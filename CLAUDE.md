@@ -304,6 +304,11 @@ Ainda não exercitado: ziamath inline, colunas, tabelas, figuras, presets `qwen2
    - Herança de palavra curta na regra `slant` (revisão do PR #1): Benjamin pares 89,2 → 98,4 de
      cobertura, mas a precisão do Horkheimer cai para 96,6 (< 98,2 da referência). Não adotada.
 2. Editor: v1 sem negrito/itálico parcial, sem editar notas, sem inserir/reordenar blocos.
+   Pendências conhecidas (PR #2): num bloco com marca parcial, dois cliques em Negrito/Itálico não voltam
+   ao original (apagar o campo volta); a prévia mostra cabeçalho se todos os blocos da 1ª página do
+   original estão ocultos; "Renderizar tudo" pode mostrar uma página a mais quando o bloco seguinte
+   começa no topo dela; o JS das correções da revisão (Recarregar, Justificar todos, atalho do tamanho)
+   não foi exercitado num navegador.
 3. **Testes** restantes: `test_inline.py`, `test_notes.py` (split_label, link por página,
    endnotes, `[n]`, `*`), `test_vlm.py` com `httpx.MockTransport` (cerca, JSON truncado, escala
    pixels/norm1000), `test_assemble.py` com PageLayouts sintéticos (cabeçalho corrente, junção
