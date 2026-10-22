@@ -54,26 +54,31 @@ class _HtmlRenderer:
     def render(self) -> str:
         body: list[str] = []
         group: list[str] = []
+        shown = False          # já saiu algum bloco visível
+        page_break = False     # quebra de página de um bloco oculto, à espera do próximo visível
         for self.index, block in enumerate(self.doc.blocks):
             cols = self.doc.columns > 1 and not block.style.full_width
             if block.style.hidden:
                 anchor = self._trailing_anchor(block)       # as notas sem chamada continuam
                 if anchor:
                     (group if cols else body).append(anchor)
+                page_break = page_break or block.style.page_break_before
                 continue
             html = self._block(block)
-            if block.style.page_break_before and (body or group):
+            if (block.style.page_break_before or page_break) and shown:
                 # fora do div.cols (dentro dele seria quebra de coluna); antes do 1º bloco, nada
                 if group:
                     body.append(self._columns(group))
                     group = []
                 body.append('<div class="page-break"></div>')
+            page_break, shown = False, True
             if block.style.space_before_lines > 0:
-                if group:
+                # bloco de coluna: o espaço fica dentro do div.cols (fechá-lo rebalancearia as colunas)
+                if group and not cols:
                     body.append(self._columns(group))
                     group = []
                 height = block.style.space_before_lines * self.doc.line_height * self.doc.body_font_pt
-                body.append(f'<div class="space" style="height:{height:g}pt"></div>')
+                (group if cols else body).append(f'<div class="space" style="height:{height:g}pt"></div>')
             if cols:
                 group.append(html)
                 continue
@@ -102,17 +107,25 @@ class _HtmlRenderer:
         return self._mark(html) if self.block_ids or self.highlight == self.index else html
 
     def _mark(self, html: str) -> str:
-        """id="b{i}" e class="hl" no elemento principal (o filete, se houver, vem antes dele)."""
+        """id="b{i}" e class="hl" no elemento principal (o filete, se houver, vem antes dele). Se ele já
+        tem id (div.endnote), o id do bloco vai num div em volta: um 2º id na tag seria ignorado."""
+        wrap = False
+
         def tag(m: re.Match[str]) -> str:
+            nonlocal wrap
             t = m.group(0)
             if self.block_ids:
-                t = t[:-1] + f' id="b{self.index}">'
+                if re.search(r'\sid="', t):
+                    wrap = True
+                else:
+                    t = t[:-1] + f' id="b{self.index}">'
             if self.highlight == self.index:
                 t = re.sub(r'class="', 'class="hl ', t, 1) if 'class="' in t else t[:-1] + ' class="hl">'
             return t
 
         # o primeiro elemento que não é o div de filete
-        return re.sub(r'<(?!div class="rule )[a-z0-9]+[^>]*>', tag, html, count=1)
+        out = re.sub(r'<(?!div class="rule )[a-z0-9]+[^>]*>', tag, html, count=1)
+        return f'<div id="b{self.index}">{out}</div>' if wrap else out
 
     def _block_html(self, b: Block) -> str:
         style = self._style_attr(b)

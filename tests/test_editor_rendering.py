@@ -97,3 +97,24 @@ def test_preview_keeps_the_running_header_after_the_first_page(monkeypatch):
     # a prévia que começa no 1º bloco segue a regra do documento (sem cabeçalho na 1ª página)
     assert "CABECALHO CORRENTE" not in _preview_text(monkeypatch, doc, [0, 1])
     assert doc.header_on_first_page is False   # o documento não muda
+
+
+def test_endnote_block_is_mapped_and_has_a_single_id(tmp_path):
+    import re
+
+    from ocrpdf.model import Note
+    from ocrpdf.render import render_html
+
+    doc = Document()
+    doc.blocks = [
+        Block(kind="paragraph", spans=[Span("Texto com chamada"), Span("1", sup=True, note="n1")]),
+        Block(kind="heading", level=2, spans=[Span("Notas")]),
+        Block(kind="endnote", note="n1"),
+    ]
+    doc.notes = {"n1": Note("n1", "1", "endnote", 0, [Block("paragraph", [Span("Conteúdo da nota.")])])}
+    mapping, _ = render_full(doc, OutputFormat(), tmp_path / "a.pdf", tmp_path)
+    assert 2 in mapping
+    for html in (render_html(doc, block_ids=True), render_html(doc, block_ids=True, highlight=2)):
+        assert not re.search(r'<[^>]*\sid="[^"]*"[^>]*\sid="', html)   # nenhuma tag com dois id
+        assert 'id="b2"' in html and 'id="n1"' in html
+    assert 'class="hl endnote" id="n1"' in render_html(doc, block_ids=True, highlight=2)

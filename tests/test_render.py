@@ -257,3 +257,33 @@ def test_new_fields_survive_save_and_old_files_load(tmp_path: Path) -> None:
     st = old.blocks[1].style
     assert (st.hidden, st.space_before_lines, st.bold, st.italic) == (False, 0, None, None)
     assert old.output is None and old.source_path == ""
+
+
+def test_hidden_block_passes_its_page_break_to_the_next_visible_block(tmp_path: Path) -> None:
+    # ocultar o título que abre a 2ª parte não pode levar junto a quebra de página
+    doc = _two_parts(1, 2)
+    doc.blocks[2].style.hidden = True
+    doc.blocks[2].style.space_before_lines = 3              # o espaço do oculto vai com ele
+    out = tmp_path / "out.pdf"
+    render.render_pdf(doc, out, base_dir=tmp_path)
+    first, second = (p.extract_text() for p in PdfReader(out).pages)
+    assert "Segunda parte" not in first + second and "segunda" not in first
+    assert second.lstrip().startswith("Texto curto da segunda")
+    assert 'class="space"' not in _body_html(doc)
+    # oculto com quebra antes do 1º bloco visível (e com nota sem chamada): nada antes do 1º bloco
+    doc = _two_parts(1, 0)
+    doc.notes = {"n1": Note("n1", "1", "footnote", 0, [Block("paragraph", [Span("TextoDaN1")])])}
+    doc.blocks[0].style.hidden = True
+    doc.blocks[0].trailing_notes = ["n1"]
+    assert "page-break" not in _body_html(doc)
+
+
+def test_space_before_lines_in_a_column_stays_inside_the_columns() -> None:
+    doc = Document(columns=2, blocks=[Block(kind="paragraph", spans=[Span(f"Parágrafo {i}.")]) for i in range(4)])
+    for b in doc.blocks:
+        b.style.full_width = False
+    doc.blocks[2].style.space_before_lines = 2
+    html = _body_html(doc)
+    assert html.count('class="cols"') == 1
+    cols = html.split('class="cols"', 1)[1]
+    assert cols.index("Parágrafo 1.") < cols.index('class="space"') < cols.index("Parágrafo 2.")
