@@ -6,7 +6,6 @@ import dataclasses
 import errno
 import json
 import logging
-import math
 import mimetypes
 import threading
 import webbrowser
@@ -15,12 +14,14 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from ..model import OutputFormat
+from ..output_format import validate_output_format
 from . import rendering
 from .session import ConflictError, EditError, EditSession
 
 _STATIC = Path(__file__).with_name("static")
 _log = logging.getLogger(__name__)
 _BUSY = "renderização em andamento; aguarde terminar"
+_MAX_BODY = 10 * 1024 * 1024   # corpo maior: 413, sem ler
 
 
 class _HttpError(Exception):
@@ -34,7 +35,7 @@ class _App:
 
     def __init__(self, session: EditSession, output: Path, pdf: Path | None) -> None:
         self.session = session
-        self.output = output
+        self.output = Path(output).resolve()   # a resposta do Renderizar tudo mostra o caminho completo
         self.pdf = pdf
         self.base_dir = session.path.parent
         self.render_lock = threading.Lock()   # uma renderização por vez
@@ -59,10 +60,9 @@ class _App:
         if page not in self._sizes:
             try:
                 with self.pdf_lock:
-                    _, w, h = rendering.original_image(self.pdf, page)
+                    self._sizes[page] = rendering.original_size(self.pdf, page)
             except Exception:   # página fora do PDF ou PDF ilegível: sem caixa
                 return None
-            self._sizes[page] = (w, h)
         return self._sizes[page]
 
     # --- ações ------------------------------------------------------------
@@ -119,10 +119,11 @@ class _App:
     def render_page(self, body: dict) -> dict:
         s = self.session
         with self.state_lock:
-            page = self.apply(body)
-            highlight = body.get("highlight")
-            if highlight is not None and not isinstance(highlight, int):
+            highlight = body.get("highlight")   # conferido antes de mexer na sessão
+            if highlight is not None and (not isinstance(highlight, int) or isinstance(highlight, bool)
+                                          or not 0 <= highlight < len(s.doc.blocks)):
                 raise _HttpError(400, "'highlight' deve ser o índice de um bloco")
+            page = self.apply(body)
             with self.pdf_lock:
                 images = rendering.render_page_images(
                     s.doc, s.page_indices(page), s.format(), self.base_dir, highlight=highlight)
@@ -139,7 +140,9 @@ class _App:
         s = self.session
         with self.state_lock:
             page = self.save(body)
-            mapping, count = rendering.render_full(s.doc, s.format(), self.output, self.base_dir)
+            # o HTML como o `ocrpdf render` grava (ao lado do document.json, sem os ids dos blocos)
+            mapping, count = rendering.render_full(s.doc, s.format(), self.output, self.base_dir,
+                                                   html_out=s.path.with_suffix(".html"))
             wanted = rendering.final_pages(mapping, s.page_indices(page), count)
         with self.pdf_lock:
             images = rendering.pdf_page_images(self.output, wanted) if wanted else []
@@ -147,14 +150,13 @@ class _App:
 
 
 def _int(value, name: str) -> int:
+    """Inteiro do JSON ou texto de dígitos da query; true e 0.9 não são índices."""
     try:
+        if isinstance(value, bool) or (isinstance(value, float) and not value.is_integer()):
+            raise ValueError
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         raise _HttpError(400, f"'{name}' deve ser um número inteiro") from None
-
-
-def _finite(v) -> bool:
-    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
 
 
 def _format(data) -> OutputFormat:
@@ -162,10 +164,10 @@ def _format(data) -> OutputFormat:
         raise _HttpError(400, "campo 'format' ausente")
     known = {f.name for f in dataclasses.fields(OutputFormat)}
     fmt = OutputFormat(**{k: v for k, v in data.items() if k in known})
-    if (not isinstance(fmt.page_size, str) or not _finite(fmt.margin_cm)
-            or not (fmt.font_size_pt is None or _finite(fmt.font_size_pt))
-            or not isinstance(fmt.header, bool)):
-        raise _HttpError(400, "formato inválido: page_size texto, margin_cm e font_size_pt números finitos, header booleano")
+    try:
+        validate_output_format(fmt)
+    except ValueError as e:
+        raise _HttpError(400, f"formato inválido: {e}") from None
     return fmt
 
 
@@ -224,6 +226,13 @@ def _handler(app: _App) -> type[BaseHTTPRequestHandler]:
         def _body(self) -> dict:
             try:
                 n = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                n = -1   # não numérico: inválido, como o negativo
+            if n < 0:   # read(-1) leria até o cliente fechar a conexão
+                raise _HttpError(400, "Content-Length inválido")
+            if n > _MAX_BODY:
+                raise _HttpError(413, f"corpo da requisição grande demais (máximo de {_MAX_BODY // 2**20} MB)")
+            try:
                 data = json.loads(self.rfile.read(n) or b"{}")   # NaN/Infinity: recusados em _format e na sessão
             except ValueError:
                 raise _HttpError(400, "corpo da requisição não é um JSON válido") from None
@@ -263,7 +272,10 @@ def _handler(app: _App) -> type[BaseHTTPRequestHandler]:
             try:
                 _, _, token, name = path.split("/")
                 images = app.images[token]
-                data = images[int(name.removesuffix(".png"))]
+                k = int(name.removesuffix(".png"))
+                if k < 0:   # images[-1] seria a última
+                    raise IndexError
+                data = images[k]
             except (ValueError, KeyError, IndexError):
                 raise _HttpError(404, "imagem não encontrada") from None
             self._send(200, data, "image/png")
@@ -282,9 +294,10 @@ def _handler(app: _App) -> type[BaseHTTPRequestHandler]:
         # --- POST ---
         def do_POST(self) -> None:
             def page_post(p, q):
+                body = self._body()   # lido fora do lock, como nos outros POST
                 with app.state_lock:
                     page = app.check_page(_int(q.get("n"), "n"))
-                    text = self._body().get("text")
+                    text = body.get("text")
                     if not isinstance(text, str):
                         raise _HttpError(400, "campo 'text' ausente")
                     app.session.apply_page(page, text)
@@ -336,6 +349,8 @@ def serve(document: Path, output: Path, pdf: Path | None, port: int = 0, open_br
     original = _find_original(session, pdf)
     if original is None:
         print("ocrpdf: sem PDF original (use --pdf); a aba Original ficará indisponível")
+    elif Path(output).resolve() == original.resolve():
+        raise RuntimeError(f"o PDF de saída ({output}) é o próprio PDF escaneado; escolha outro com -o")
     try:
         server = make_server(session, output, original, port)
     except (OSError, OverflowError) as e:

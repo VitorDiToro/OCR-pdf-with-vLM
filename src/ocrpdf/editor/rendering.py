@@ -8,7 +8,7 @@ from pathlib import Path
 
 from ..model import Document, OutputFormat
 from ..output_format import apply_format
-from ..render import layout
+from ..render import layout, render_html
 
 
 def _png(image) -> bytes:
@@ -44,11 +44,15 @@ def render_page_images(doc: Document, indices: list[int], fmt: OutputFormat, bas
     return pdf_page_images(pdf, list(range(len(rendered.pages))), dpi)
 
 
-def render_full(doc: Document, fmt: OutputFormat, out_pdf: Path, base_dir: Path) -> tuple[dict[int, int], int]:
-    """Grava o PDF do documento inteiro; devolve bloco → página final (0-based) dos blocos visíveis
-    e o número de páginas."""
-    rendered = layout(apply_format(doc, fmt), base_dir, block_ids=True)
+def render_full(doc: Document, fmt: OutputFormat, out_pdf: Path, base_dir: Path,
+                html_out: Path | None = None) -> tuple[dict[int, int], int]:
+    """Grava o PDF do documento inteiro (e, com `html_out`, o HTML como o `ocrpdf render`, sem os ids
+    dos blocos); devolve bloco → página final (0-based) dos blocos visíveis e o número de páginas."""
+    formatted = apply_format(doc, fmt)
+    rendered = layout(formatted, base_dir, block_ids=True)
     rendered.write_pdf(out_pdf)
+    if html_out is not None:
+        html_out.write_text(render_html(formatted), encoding="utf-8")
     mapping: dict[int, int] = {}
     for n, page in enumerate(rendered.pages):
         for name in page.anchors:
@@ -70,6 +74,18 @@ def final_pages(mapping: dict[int, int], indices: list[int], page_count: int) ->
     nxt = min((i for i in mapping if i > max(indices)), default=None)
     end = mapping[nxt] if nxt is not None else page_count - 1
     return list(range(min(shown), max(end, max(shown)) + 1))
+
+
+def original_size(pdf: Path, page: int) -> tuple[float, float]:
+    """Tamanho em pt (largura, altura) da página do PDF escaneado, sem rasterizá-la."""
+    import pypdfium2 as pdfium
+
+    doc = pdfium.PdfDocument(str(pdf))
+    try:
+        w, h = doc[page].get_size()
+        return float(w), float(h)
+    finally:
+        doc.close()
 
 
 def original_image(pdf: Path, page: int, dpi: int = 100) -> tuple[bytes, float, float]:

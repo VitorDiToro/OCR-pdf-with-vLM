@@ -144,7 +144,7 @@ def test_reload_reads_disk_and_discards_memory(tmp_path):
 
 def test_reload_failure_keeps_the_session(tmp_path):
     s, path = _make(tmp_path)
-    s.apply_page(1, s.page_text(1))
+    s.apply_page(1, s.page_text(1).replace('"a1"', '"mudou"'))
     before = s.doc
     path.write_text("{ quebrado", encoding="utf-8")
     with pytest.raises(EditError, match="document.json"):
@@ -177,3 +177,31 @@ def test_nan_and_infinity_in_format_are_refused(tmp_path, field, value):
     with pytest.raises(EditError):
         s.set_format(OutputFormat(page_size="a4", **{field: value}))
     assert s.format() == OutputFormat() and not s.dirty
+
+
+def test_save_of_a_deleted_document_is_a_conflict(tmp_path):
+    s, path = _make(tmp_path)
+    path.unlink()
+    with pytest.raises(ConflictError, match="apagado ou renomeado"):
+        s.save()
+    assert not path.exists()
+
+
+def test_backup_takes_the_name_of_the_document(tmp_path):
+    doc = Document(blocks=[_block("x", 0)])
+    path = tmp_path / "a.json"
+    doc.save(path)
+    original = path.read_bytes()
+    s = EditSession(path)
+    s.save()
+    assert (tmp_path / "a.orig.json").read_bytes() == original
+    assert not (tmp_path / "document.orig.json").exists()
+
+
+def test_applying_the_same_text_or_format_does_not_dirty(tmp_path):
+    s, _ = _make(tmp_path)
+    s.apply_page(1, s.page_text(1))
+    s.set_format(s.format())
+    assert not s.dirty
+    s.set_format(OutputFormat(page_size="a4"))
+    assert s.dirty

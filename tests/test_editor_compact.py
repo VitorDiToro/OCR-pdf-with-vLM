@@ -62,3 +62,13 @@ def test_missing_field_means_default():
 def test_rejects(data, msg):
     with pytest.raises(ValueError, match=msg):
         from_compact(_para(), data)
+
+
+def test_integer_float_space_before_lines_roundtrips_as_int():
+    b = _para(space_before_lines=1.0)                 # document.json editado à mão
+    data = json.loads(json.dumps(to_compact(b)))
+    back = from_compact(b, data)
+    assert back.style.space_before_lines == 1 and type(back.style.space_before_lines) is int
+    for bad in (1.5, -1.0, True):
+        with pytest.raises(ValueError, match="space_before_lines"):
+            from_compact(b, {"kind": "paragraph", "style": {"space_before_lines": bad}})

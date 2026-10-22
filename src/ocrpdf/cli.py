@@ -95,7 +95,6 @@ def _parser() -> argparse.ArgumentParser:
 
     conv = sub.add_parser("convert", parents=[ocr], help="OCR + renderização")
     conv.add_argument("-o", "--output", type=Path, help="PDF de saída (padrão: <entrada>_ocr.pdf)")
-    conv.add_argument("--no-header", action="store_true", help="omite o cabeçalho corrente")
     _add_format_options(conv)
     conv.set_defaults(func=_convert)
 
@@ -105,7 +104,6 @@ def _parser() -> argparse.ArgumentParser:
     ren = sub.add_parser("render", parents=[common], help="renderiza um document.json")
     ren.add_argument("document", type=Path)
     ren.add_argument("-o", "--output", type=Path, required=True)
-    ren.add_argument("--no-header", action="store_true")
     _add_format_options(ren)
     ren.set_defaults(func=_render)
 
@@ -127,6 +125,8 @@ def _add_format_options(p: argparse.ArgumentParser) -> None:
                    help="margens em cm, decimal com ponto (padrão 2.5 ou o gravado); só vale quando --page-size não é original")
     p.add_argument("--font-size", type=_font_size_arg, default=None, metavar="PT",
                    help="tamanho do corpo em pt, decimal com ponto; títulos, notas e cabeçalho escalam junto (padrão: o gravado ou o medido)")
+    p.add_argument("--header", action=argparse.BooleanOptionalAction, default=None,
+                   help="liga/desliga o cabeçalho corrente (padrão: o gravado; sem ele, ligado)")
 
 
 def _page_size_arg(spec: str) -> str:
@@ -157,8 +157,8 @@ def _output_format(args, saved: OutputFormat | None) -> OutputFormat:
         fmt.margin_cm = args.margin
     if args.font_size is not None:
         fmt.font_size_pt = args.font_size
-    if args.no_header:
-        fmt.header = False
+    if args.header is not None:
+        fmt.header = args.header
     return fmt
 
 
@@ -169,6 +169,10 @@ def _formatted(args, doc: Document) -> Document | None:
     except ValueError as e:
         print(f"ocrpdf: erro: {e}", file=sys.stderr)
         return None
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    return a.resolve() == b.resolve()
 
 
 def _work_dir(args, output: Path | None) -> Path:
@@ -232,6 +236,10 @@ def _port(url: str) -> int:
 
 def _convert(args) -> int:
     output = args.output or args.input.with_name(args.input.stem + "_ocr.pdf")
+    if _same_file(output, args.input):
+        print(f"ocrpdf: erro: o PDF de saída ({output}) é o próprio PDF escaneado; escolha outro com -o",
+              file=sys.stderr)
+        return 2
     # erros de formato (margem grande demais para a página) aparecem antes do OCR, que é demorado
     if _formatted(args, Document()) is None:
         return 2
@@ -255,6 +263,12 @@ def _analyze(args) -> int:
 
 def _render(args) -> int:
     doc = Document.load(args.document)
+    # source_path: absoluto, ou relativo à pasta do document.json (como no editor)
+    if doc.source_path and any(_same_file(args.output, p) for p in
+                               (Path(doc.source_path), args.document.parent / doc.source_path)):
+        print(f"ocrpdf: erro: o PDF de saída ({args.output}) é o PDF escaneado de origem do documento "
+              "(source_path); escolha outro com -o", file=sys.stderr)
+        return 2
     if (doc := _formatted(args, doc)) is None:
         return 2
     render_pdf(doc, args.output, base_dir=args.document.parent, html_out=args.document.with_suffix(".html"))

@@ -251,7 +251,7 @@ def test_conflict_then_reload_then_save(api, tmp_path):
 def test_reload_of_a_broken_file_keeps_the_session(api, tmp_path):
     s, c = api()
     path = tmp_path / "document.json"
-    c.post("/api/page?n=1", json={"text": s.page_text(1)})
+    c.post("/api/page?n=1", json={"text": s.page_text(1).replace("Parágrafo 2", "Mudou")})
     path.write_text("{ quebrado", encoding="utf-8")
     r = c.post("/api/reload", json={})
     assert r.status_code == 400 and "document.json" in r.json()["error"]
@@ -342,3 +342,108 @@ def test_cli_edit_start_errors_are_messages(tmp_path, capsys):
         assert cli.main(["edit", str(sess.path), "-o", "x.pdf", "--no-browser", "--port", str(port)]) == 1
     err = capsys.readouterr().err
     assert "ocrpdf: erro:" in err and str(port) in err and "--port" in err
+
+
+# --- revisão do PR #2 ---------------------------------------------------------------------
+
+def test_serve_refuses_output_equal_to_the_original(tmp_path, monkeypatch, capsys):
+    def no_server(*a, **k):
+        raise AssertionError("não devia abrir o servidor")
+
+    monkeypatch.setattr(server, "make_server", no_server)
+    pdf = tmp_path / "in.pdf"
+    pdf.write_bytes(b"%PDF-1.4 original")
+    sess = _doc(tmp_path)
+    assert cli.main(["edit", str(sess.path), "-o", str(pdf), "--pdf", str(pdf), "--no-browser"]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("ocrpdf: erro:") and "PDF escaneado" in err
+    sess = _doc(tmp_path, source_path="in.pdf")        # relativo à pasta do document.json
+    assert cli.main(["edit", str(sess.path), "-o", str(tmp_path / "." / "in.pdf"), "--no-browser"]) == 1
+    assert "PDF escaneado" in capsys.readouterr().err
+    assert pdf.read_bytes() == b"%PDF-1.4 original"
+
+
+def _raw_post(c, length: str) -> tuple[int, bytes]:
+    """POST /api/save com o Content-Length dado e sem corpo (o httpx não deixa mandar um inválido)."""
+    import socket
+
+    port = c.base_url.port
+    with socket.create_connection(("127.0.0.1", port), timeout=10) as sock:
+        sock.sendall((f"POST /api/save HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n"
+                      f"Content-Type: application/json\r\nContent-Length: {length}\r\n\r\n").encode())
+        data = b""
+        while chunk := sock.recv(65536):
+            data += chunk
+    head, _, body = data.partition(b"\r\n\r\n")
+    return int(head.split()[1]), body
+
+
+def test_bad_content_length(api, tmp_path):
+    s, c = api()
+    before = (tmp_path / "document.json").read_bytes()
+    status, body = _raw_post(c, "-1")
+    assert status == 400 and "Content-Length" in json.loads(body)["error"]
+    status, body = _raw_post(c, str(server._MAX_BODY + 1))   # sem mandar o corpo: não pode esperar por ele
+    assert status == 413 and "grande demais" in json.loads(body)["error"]
+    assert (tmp_path / "document.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("fmt", [{"margin_cm": -5}, {"font_size_pt": 1e308}, {"margin_cm": None},
+                                 {"page_size": 5}, {"header": "sim"}])
+def test_invalid_format_is_400_and_nothing_is_written(api, tmp_path, fmt):
+    s, c = api()
+    path = tmp_path / "document.json"
+    before = path.read_bytes()
+    data = json.loads(s.page_text(1))
+    data[0]["spans"][0]["text"] = "não grava"
+    full = {"page_size": "a4", "margin_cm": 2.0, "font_size_pt": None, "header": True, **fmt}
+    r = c.post("/api/save", json={"page": 1, "text": json.dumps(data), "format": full})
+    assert r.status_code == 400 and r.json()["error"].startswith("formato inválido:")
+    assert path.read_bytes() == before and not s.dirty and "não grava" not in s.page_text(1)
+
+
+@pytest.mark.parametrize("highlight", [1.5, True, -1, 99, "2"])
+def test_bad_highlight_is_400_before_touching_the_session(api, highlight):
+    s, c = api()
+    data = json.loads(s.page_text(1))
+    data[0]["spans"][0]["text"] = "não aplica"
+    body = {"page": 1, "text": json.dumps(data), "format": s.format().__dict__, "highlight": highlight}
+    r = c.post("/api/render/page", json=body)
+    assert r.status_code == 400 and "highlight" in r.json()["error"]
+    assert not s.dirty and "não aplica" not in s.page_text(1)
+
+
+@pytest.mark.parametrize("page", [True, 0.9, 1.5, "1.0"])
+def test_page_must_be_an_integer(api, page):
+    s, c = api()
+    r = c.post("/api/save", json={"page": page, "text": s.page_text(1), "format": s.format().__dict__})
+    assert r.status_code == 400 and "'page'" in r.json()["error"]
+    assert c.post("/api/save", json={"page": 1.0, "text": s.page_text(1), "format": s.format().__dict__}).status_code == 200
+
+
+def test_negative_image_index_is_404(api):
+    s, c = api()
+    r = c.post("/api/render/page", json={"page": 1, "text": s.page_text(1), "format": s.format().__dict__})
+    token = r.json()["images"][0].split("/")[2]
+    assert c.get(f"/img/{token}/0.png").status_code == 200
+    assert c.get(f"/img/{token}/-1.png").status_code == 404
+
+
+def test_save_after_the_document_was_deleted_is_a_conflict(api, tmp_path):
+    s, c = api()
+    (tmp_path / "document.json").rename(tmp_path / "outro.json")
+    r = c.post("/api/save", json={"page": 1, "text": s.page_text(1), "format": s.format().__dict__})
+    assert r.status_code == 409 and r.json()["conflict"] is True
+    assert "apagado ou renomeado" in r.json()["error"]
+
+
+def test_render_all_writes_the_html_like_cli_render(api, tmp_path):
+    s, c = api()
+    html = tmp_path / "document.html"
+    r = c.post("/api/render/all", json={"page": 1, "text": s.page_text(1), "format": s.format().__dict__}).json()
+    assert r["pdf"] == str((tmp_path / "out.pdf").resolve())
+    editor_html = html.read_text(encoding="utf-8")
+    assert 'id="b0"' not in editor_html
+    html.unlink()
+    assert cli.main(["render", str(tmp_path / "document.json"), "-o", str(tmp_path / "cli.pdf")]) == 0
+    assert html.read_text(encoding="utf-8") == editor_html

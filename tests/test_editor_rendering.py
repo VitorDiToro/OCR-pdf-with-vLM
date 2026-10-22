@@ -118,3 +118,9 @@ def test_endnote_block_is_mapped_and_has_a_single_id(tmp_path):
         assert not re.search(r'<[^>]*\sid="[^"]*"[^>]*\sid="', html)   # nenhuma tag com dois id
         assert 'id="b2"' in html and 'id="n1"' in html
     assert 'class="hl endnote" id="n1"' in render_html(doc, block_ids=True, highlight=2)
+
+
+def test_original_size_without_rasterizing(tmp_path):
+    img, _ = benjamin_like_page()
+    pdf = make_pdf(tmp_path / "s.pdf", [img], dpi=200)
+    assert rendering.original_size(pdf, 0) == original_image(pdf, 0)[1:]

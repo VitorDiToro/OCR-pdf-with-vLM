@@ -100,6 +100,8 @@ def _style(base: BlockStyle, d: object) -> BlockStyle:
             raise ValueError("font_size_pt deve ser um número positivo")
         v["font_size_pt"] = float(fs)
     n = v["space_before_lines"]
+    if isinstance(n, float) and n.is_integer():
+        n = v["space_before_lines"] = int(n)   # 1.0 (document.json editado à mão) vale 1
     if not isinstance(n, int) or isinstance(n, bool) or n < 0:
         raise ValueError("space_before_lines deve ser um inteiro não negativo")
     for f in ("page_break_before", "hidden"):

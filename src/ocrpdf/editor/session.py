@@ -93,8 +93,9 @@ class EditSession:
             except ValueError as e:
                 raise EditError(f"bloco {n}: {e}") from e
         for i, b in zip(indices, new):
-            self.doc.blocks[i] = b
-        self.dirty = True
+            if b != self.doc.blocks[i]:   # o mesmo texto de volta (Descartar) não suja a sessão
+                self.doc.blocks[i] = b
+                self.dirty = True
 
     def format(self) -> OutputFormat:
         return self.doc.output or OutputFormat()
@@ -104,8 +105,9 @@ class EditSession:
             apply_format(self.doc, fmt)
         except ValueError as e:
             raise EditError(str(e)) from e
-        self.doc.output = fmt
-        self.dirty = True
+        if fmt != self.format():
+            self.doc.output = fmt
+            self.dirty = True
 
     def justify_all(self) -> int:
         changed = 0
@@ -120,12 +122,19 @@ class EditSession:
     # --- gravação ---------------------------------------------------------
 
     def save(self) -> None:
-        if self.path.stat().st_mtime_ns != self._mtime:
+        try:
+            mtime = self.path.stat().st_mtime_ns
+        except FileNotFoundError:
+            raise ConflictError(
+                f"o documento não está mais em {self.path} (apagado ou renomeado); restaure o arquivo e "
+                "use Recarregar do disco"
+            ) from None
+        if mtime != self._mtime:
             raise ConflictError(
                 "o document.json mudou no disco desde que foi aberto ou gravado (outro programa ou outra "
                 "janela); use Recarregar do disco e salve de novo"
             )
-        backup = self.path.with_name("document.orig.json")
+        backup = self.path.with_name(self.path.stem + ".orig.json")   # document.json → document.orig.json
         if not backup.exists():
             backup.write_bytes(self.path.read_bytes())
         tmp = self.path.with_name(self.path.name + ".tmp")

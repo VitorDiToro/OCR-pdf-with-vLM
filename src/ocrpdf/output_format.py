@@ -6,6 +6,7 @@ O `document.json` guarda sempre o formato original medido; aqui se produz uma c�
 from __future__ import annotations
 
 import copy
+import json
 import math
 import re
 
@@ -15,6 +16,7 @@ _PT_PER_CM = 72 / 2.54
 _A4_PT = (595.28, 841.89)
 _MIN_CM, _MAX_CM = 5.0, 100.0
 _MIN_TEXT_CM = 3.0     # área de texto mínima em cada direção
+_MAX_FONT_PT = 1000
 _SIZE_RE = re.compile(r"^(\d+(?:[.,]\d+)?)\s*x\s*(\d+(?:[.,]\d+)?)$", re.IGNORECASE)
 
 
@@ -40,8 +42,8 @@ def apply_output_format(doc: Document, page_size: tuple[float, float] | None, ma
     """Devolve uma cópia de `doc` com a página e/ou as fontes ajustadas (o original não muda)."""
     if not math.isfinite(margin_cm):
         raise ValueError("a margem deve ser um número finito")
-    if font_size_pt is not None and not (math.isfinite(font_size_pt) and font_size_pt > 0):
-        raise ValueError("o tamanho da fonte deve ser um número positivo")
+    if font_size_pt is not None and not (math.isfinite(font_size_pt) and 0 < font_size_pt <= _MAX_FONT_PT):
+        raise ValueError(f"o tamanho da fonte deve ser um número positivo de até {_MAX_FONT_PT} pt")
     out = copy.deepcopy(doc)
     if page_size is not None:
         w, h = page_size
@@ -55,8 +57,33 @@ def apply_output_format(doc: Document, page_size: tuple[float, float] | None, ma
     return out
 
 
+def _number(v: object) -> bool:
+    """Número finito (sem bool: True é int em Python)."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def validate_output_format(fmt: OutputFormat) -> None:
+    """Confere tipos e intervalos do formato (o document.json é editável à mão); ValueError se inválido."""
+    def shown(v: object) -> str:
+        return json.dumps(v, ensure_ascii=False, default=str)   # como no document.json: null, "3"
+
+    if not isinstance(fmt.page_size, str):
+        raise ValueError(f"tamanho de página inválido: {shown(fmt.page_size)} (use original, a4 ou "
+                         "<largura>x<altura> em cm)")
+    parse_page_size(fmt.page_size)
+    if not (_number(fmt.margin_cm) and fmt.margin_cm >= 0):
+        raise ValueError("a margem deve ser um número finito e não negativo, em cm "
+                         f"(recebido: {shown(fmt.margin_cm)})")
+    if fmt.font_size_pt is not None and not (_number(fmt.font_size_pt) and 0 < fmt.font_size_pt <= _MAX_FONT_PT):
+        raise ValueError(f"o tamanho da fonte deve ser um número positivo de até {_MAX_FONT_PT} pt "
+                         f"(recebido: {shown(fmt.font_size_pt)})")
+    if not isinstance(fmt.header, bool):
+        raise ValueError(f"o cabeçalho (header) deve ser true ou false (recebido: {shown(fmt.header)})")
+
+
 def apply_format(doc: Document, fmt: OutputFormat) -> Document:
     """Como `apply_output_format`, a partir do formato gravado; `header=False` tira o cabeçalho corrente."""
+    validate_output_format(fmt)
     out = apply_output_format(doc, parse_page_size(fmt.page_size), fmt.margin_cm, fmt.font_size_pt)
     if not fmt.header:
         out.running_header = ""
