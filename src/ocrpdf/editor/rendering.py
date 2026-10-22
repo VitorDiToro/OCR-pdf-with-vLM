@@ -1,0 +1,67 @@
+"""Imagens para o editor: páginas do PDF reconstruído, do documento inteiro e do original."""
+
+from __future__ import annotations
+
+import copy
+import io
+from pathlib import Path
+
+from ..model import Document, OutputFormat
+from ..output_format import apply_format
+from ..render import layout
+
+
+def _png(image) -> bytes:
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def pdf_page_images(pdf: Path | bytes, pages: list[int], dpi: int = 100) -> list[bytes]:
+    """PNG das páginas (0-based) de um PDF."""
+    import pypdfium2 as pdfium
+
+    doc = pdfium.PdfDocument(pdf if isinstance(pdf, bytes) else str(pdf))
+    try:
+        return [_png(doc[p].render(scale=dpi / 72).to_pil()) for p in pages]
+    finally:
+        doc.close()
+
+
+def render_page_images(doc: Document, indices: list[int], fmt: OutputFormat, base_dir: Path,
+                       highlight: int | None = None, dpi: int = 100) -> list[bytes]:
+    """Renderiza só os blocos `indices` (com todas as notas, geometria e cabeçalho); PNG por página.
+
+    `highlight` é um índice em `doc.blocks`.
+    """
+    tmp = copy.copy(doc)
+    tmp.blocks = [doc.blocks[i] for i in indices]
+    pos = indices.index(highlight) if highlight in indices else None
+    rendered = layout(apply_format(tmp, fmt), base_dir, block_ids=pos is not None, highlight=pos)
+    pdf = rendered.write_pdf()
+    return pdf_page_images(pdf, list(range(len(rendered.pages))), dpi)
+
+
+def render_full(doc: Document, fmt: OutputFormat, out_pdf: Path, base_dir: Path) -> dict[int, int]:
+    """Grava o PDF do documento inteiro; devolve bloco → página final (0-based) dos blocos visíveis."""
+    rendered = layout(apply_format(doc, fmt), base_dir, block_ids=True)
+    rendered.write_pdf(out_pdf)
+    mapping: dict[int, int] = {}
+    for n, page in enumerate(rendered.pages):
+        for name in page.anchors:
+            if name.startswith("b") and name[1:].isdigit():
+                mapping.setdefault(int(name[1:]), n)
+    return mapping
+
+
+def original_image(pdf: Path, page: int, dpi: int = 100) -> tuple[bytes, float, float]:
+    """PNG da página do PDF escaneado e seu tamanho em pt (largura, altura)."""
+    import pypdfium2 as pdfium
+
+    doc = pdfium.PdfDocument(str(pdf))
+    try:
+        p = doc[page]
+        w, h = p.get_size()
+        return _png(p.render(scale=dpi / 72).to_pil()), float(w), float(h)
+    finally:
+        doc.close()

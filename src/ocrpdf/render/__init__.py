@@ -10,15 +10,21 @@ from .html import render_html
 log = logging.getLogger(__name__)
 
 
-def render_pdf(doc: Document, out_pdf: Path, base_dir: Path, html_out: Path | None = None) -> None:
-    """Renderiza o documento; `base_dir` resolve os caminhos relativos das figuras."""
+def layout(doc: Document, base_dir: Path, block_ids: bool = False, highlight: int | None = None,
+           html_out: Path | None = None):
+    """Diagrama o documento (WeasyPrint) aplicando o patch das notas; ponto único de renderização."""
     from weasyprint import HTML  # import tardio: carrega Pango só quando necessário
 
     _keep_footnotes_on_call_page()
-    html = render_html(doc)
+    html = render_html(doc, block_ids=block_ids, highlight=highlight)
     if html_out is not None:
         html_out.write_text(html, encoding="utf-8")
-    HTML(string=html, base_url=str(base_dir.resolve()) + "/").write_pdf(out_pdf)
+    return HTML(string=html, base_url=str(base_dir.resolve()) + "/").render()
+
+
+def render_pdf(doc: Document, out_pdf: Path, base_dir: Path, html_out: Path | None = None) -> None:
+    """Renderiza o documento; `base_dir` resolve os caminhos relativos das figuras."""
+    layout(doc, base_dir, html_out=html_out).write_pdf(out_pdf)
 
 
 _REPORT_LINE = "report = not context.in_column and can_break_now and not could_break_before"
@@ -45,4 +51,4 @@ def _keep_footnotes_on_call_page() -> None:
     block._ocrpdf_patched = True
 
 
-__all__ = ["render_html", "render_pdf"]
+__all__ = ["layout", "render_html", "render_pdf"]

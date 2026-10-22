@@ -76,8 +76,8 @@ def test_without_line_policy_notes_are_deferred(tmp_path: Path, monkeypatch: pyt
     """footnote-policy auto: a nota que não cabe sob a chamada vai sozinha para a página seguinte."""
     original = render.render_html
 
-    def with_auto_policy(doc: Document) -> str:
-        html = original(doc)
+    def with_auto_policy(doc: Document, **kwargs) -> str:
+        html = original(doc, **kwargs)
         assert "footnote-policy: line;" in html
         return html.replace("footnote-policy: line;", "footnote-policy: auto;")
 
