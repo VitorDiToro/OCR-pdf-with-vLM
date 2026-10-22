@@ -139,6 +139,11 @@ scripts/          serve_vllm.sh (um servidor; GPU_MEM pela VRAM livre; MAX_IMAGE
   (`pipeline._overlaps`); a 1ª/última linha cuja tinta, no recorte original, fica toda nessa faixa
   (menor que uma linha) é a do vizinho e não conta. Medir no recorte original, não no endireitado,
   é o que funciona em página torta; e sem vizinho sobreposto nada é descartado ("anos." fica).
+- **Fonte impossível** (logotipo de capa com haste de letra atravessando as linhas, carimbo): se a
+  fonte medida passa de 1,8× a maior em que o texto caberia no bbox (palavra mais longa na largura,
+  texto todo na área, 0,5 em por caractere), vale essa estimativa (`assemble._fitting_font_px`).
+  Nos 8 documentos reais: capas/carimbos 2,0–2,85×, texto ≤ 1,76×. Antes, capas com 115–376 pt
+  quebravam uma palavra por linha e saíam da página.
 - Corpo = mediana ponderada por linhas dos blocos `text` com ≥ 3 linhas; entrelinha = pitch/font.
 - Espaço entre parágrafos = mediana das lacunas − entrelinha extra.
 - Margens: mediana das extremidades do conteúdo; a inferior usa o 1º quartil (páginas cheias).
@@ -244,8 +249,6 @@ Ainda não exercitado: ziamath inline, colunas, tabelas, figuras, presets `qwen2
 
 1. Pendências da verificação de ponta a ponta (detalhes em
    docs/superpowers/reports/2026-10-21-italico-avaliacao.md):
-   - Capa/logotipo (Althusser p. 1 e 3): haste de letra decorativa atravessa as linhas e o título
-     sai com 376 pt. Limite de plausibilidade (fonte × largura do bbox × nº de caracteres).
    - `meta.json` sem versão da pergunta da fonte: mudar a pergunta não invalida o cache.
    - `probe.find_rules` não endireita o bloco (filete em página torta). A inclinação segue por
      bloco, não por página (decidido na revisão do PR #1: acompanha a curvatura perto da lombada).
