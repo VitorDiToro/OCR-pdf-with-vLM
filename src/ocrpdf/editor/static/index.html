@@ -26,6 +26,14 @@
     <span id="message" class="message" aria-live="polite"></span>
   </div>
 
+  <!-- conflito: o document.json mudou no disco (aparece no 409 do Salvar / Renderizar tudo) -->
+  <div id="conflict" class="bar bar-conflict" role="alert" hidden>
+    <span>O document.json mudou no disco desde que foi aberto ou gravado (outro programa ou outra janela).
+      Recarregar descarta as alterações em memória das outras páginas; o texto e o formato desta página
+      ficam na tela, não salvos, e o próximo Salvar os grava sobre o conteúdo novo.</span>
+    <button id="reload" type="button">Recarregar do disco</button>
+  </div>
+
   <!-- 2ª faixa: formato do PDF (gravado no document.json) -->
   <div class="bar bar-format">
     <span class="bar-label">Formato do PDF:</span>

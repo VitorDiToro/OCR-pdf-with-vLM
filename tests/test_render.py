@@ -198,6 +198,39 @@ def test_block_bold_and_italic_override() -> None:
     assert "font-style" not in plain.split("<body>", 1)[1]
 
 
+def _body_html(doc: Document) -> str:
+    return render.render_html(doc).split("<body>", 1)[1]
+
+
+def test_block_override_false_also_removes_the_marks_of_the_spans() -> None:
+    doc = _two_parts(1, None)
+    doc.blocks[0].spans = [Span("Primeira "), Span("parte", bold=True, italic=True)]
+    doc.blocks[1].spans = [Span("Texto "), Span("todo em itálico", italic=True), Span("1", sup=True, italic=True)]
+    plain = _body_html(doc)
+    assert "<b><i>parte</i></b>" in plain and "<i>todo em itálico</i>" in plain   # padrão: as marcas valem
+
+    doc.blocks[1].style.italic = False
+    doc.blocks[0].style.bold = False
+    html = _body_html(doc)
+    p = html.split("<p", 1)[1].split("</p>", 1)[0]
+    assert "<i>" not in p and "font-style:normal" in p
+    h2 = html.split("<h2", 1)[1].split("</h2>", 1)[0]
+    assert "<b>" not in h2 and "font-weight:normal" in h2
+    assert "<i>parte</i>" in h2           # só a marca desligada sai; o itálico do trecho fica
+
+    doc.blocks[1].style.italic = True     # ligado: as marcas dos trechos não atrapalham
+    assert "<i>todo em itálico</i>" in _body_html(doc)
+
+
+def test_block_override_false_spares_the_notes_of_the_block() -> None:
+    doc = _two_parts(1, None)
+    doc.notes = {"n1": Note("n1", "1", "footnote", 0, [Block("paragraph", [Span("Obra", italic=True)])])}
+    doc.blocks[1].spans = [Span("Texto", italic=True), Span("1", sup=True, note="n1")]
+    doc.blocks[1].style.italic = False
+    html = _body_html(doc)
+    assert "<i>Texto</i>" not in html and "<i>Obra</i>" in html
+
+
 def test_new_fields_survive_save_and_old_files_load(tmp_path: Path) -> None:
     from ocrpdf.model import OutputFormat
 

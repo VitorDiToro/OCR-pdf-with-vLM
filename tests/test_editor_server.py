@@ -3,6 +3,7 @@ import threading
 
 import httpx
 import pytest
+from pypdf import PdfReader
 
 from ocrpdf import cli, editor
 from ocrpdf.editor import rendering, server
@@ -133,6 +134,7 @@ def test_second_render_while_busy_is_refused(api, monkeypatch):
     release.set()
     t.join()
     assert r.status_code == 409 and "renderização em andamento" in r.json()["error"]
+    assert "conflict" not in r.json()   # ocupado não é conflito: a página não oferece recarregar
     assert out[0].status_code == 200
 
 
@@ -204,3 +206,139 @@ def test_post_requires_json_content_type(api, tmp_path):
     assert c.post("/api/justify-all", content=b"", headers={"Content-Type": "text/plain"}).status_code == 415
     r = c.post("/api/save", content=body, headers={"Content-Type": "application/json; charset=utf-8"})
     assert r.status_code == 200 and path.read_bytes() != before
+
+
+# --- conflito e recarga, NaN, páginas do Renderizar tudo, Host, erros de início ----------
+
+def _touch_externally(path, text: str) -> None:
+    """Outro programa regrava o document.json: muda o texto do bloco 0 (página 0)."""
+    import os
+
+    doc = Document.load(path)
+    doc.blocks[0].spans = [Span(text)]
+    doc.save(path)
+    os.utime(path, ns=(1, path.stat().st_mtime_ns + 10**9))
+
+
+def test_conflict_then_reload_then_save(api, tmp_path):
+    s, c = api()
+    path = tmp_path / "document.json"
+    fmt = s.format().__dict__
+    r = c.post("/api/render/page", json={"page": 1, "text": s.page_text(1), "format": fmt})
+    old_image = r.json()["images"][0]
+    assert c.post("/api/save", json={"page": 1, "text": s.page_text(1), "format": fmt}).status_code == 200
+    _touch_externally(path, "alterado por fora")
+    data = json.loads(s.page_text(1))
+    data[0]["spans"][0]["text"] = "editado na tela"
+    body = {"page": 1, "text": json.dumps(data), "format": fmt}
+    r = c.post("/api/save", json=body)
+    assert r.status_code == 409 and r.json()["conflict"] is True
+    # recarregar a página do navegador não basta: a sessão continua com a base antiga
+    c.get("/api/state")
+    c.get("/api/page", params={"n": 1})
+    assert c.post("/api/save", json=body).status_code == 409
+    assert c.post("/api/render/all", json=body).json()["conflict"] is True
+    r = c.post("/api/reload", json={})
+    assert r.status_code == 200 and r.json()["dirty"] is False and r.json()["pages"] == [0, 1]
+    assert c.get(old_image).status_code == 404   # imagens da sessão antiga descartadas
+    assert "alterado por fora" in c.get("/api/page", params={"n": 0}).json()["text"]
+    assert c.post("/api/save", json=body).status_code == 200
+    back = Document.load(path)
+    assert back.blocks[0].spans[0].text == "alterado por fora"
+    assert back.blocks[2].spans[0].text == "editado na tela"
+
+
+def test_reload_of_a_broken_file_keeps_the_session(api, tmp_path):
+    s, c = api()
+    path = tmp_path / "document.json"
+    c.post("/api/page?n=1", json={"text": s.page_text(1)})
+    path.write_text("{ quebrado", encoding="utf-8")
+    r = c.post("/api/reload", json={})
+    assert r.status_code == 400 and "document.json" in r.json()["error"]
+    assert c.get("/api/state").json()["dirty"] is True
+    assert c.post("/api/reload", content=b"{}", headers={"Content-Type": "text/plain"}).status_code == 415
+
+
+@pytest.mark.parametrize("raw", ["NaN", "Infinity", "1e999"])
+def test_nan_and_infinity_are_400_and_nothing_is_written(api, tmp_path, raw):
+    s, c = api()
+    path = tmp_path / "document.json"
+    before = path.read_bytes()
+    fmt = '{"page_size": "a4", "margin_cm": 2.0, "font_size_pt": null, "header": true}'
+    text = s.page_text(1).replace('"kind": "paragraph"', f'"kind": "paragraph", "style": {{"indent_em": {raw}}}', 1)
+    body = '{"page": 1, "text": ' + json.dumps(text) + ', "format": ' + fmt + "}"
+    r = c.post("/api/save", content=body, headers={"Content-Type": "application/json"})
+    assert r.status_code == 400
+    bad_fmt = fmt.replace("2.0", raw)
+    body = '{"page": 1, "text": ' + json.dumps(s.page_text(1)) + ', "format": ' + bad_fmt + "}"
+    r = c.post("/api/save", content=body, headers={"Content-Type": "application/json"})
+    assert r.status_code == 400
+    assert path.read_bytes() == before and not s.dirty
+
+
+def _long_block_session(tmp_path) -> EditSession:
+    """Página pequena; o bloco 1 (página 0 do original) ocupa várias páginas do PDF final."""
+    from ocrpdf.model import PageGeometry
+
+    words = " ".join(f"palavra{k}" for k in range(900))
+    doc = Document(page=PageGeometry(300, 300, 30, 30, 30, 30), body_font_pt=10)
+    doc.blocks = [
+        Block(kind="paragraph", spans=[Span("Abertura curta.")], source=Source(page=0)),
+        Block(kind="paragraph", spans=[Span(words)], source=Source(page=0)),
+        Block(kind="paragraph", spans=[Span("Oculto.")], source=Source(page=1)),
+        Block(kind="paragraph", spans=[Span("Depois do longo.")], source=Source(page=1)),
+        Block(kind="paragraph", spans=[Span("Fim.")], source=Source(page=2)),
+    ]
+    doc.blocks[2].style.hidden = True
+    path = tmp_path / "document.json"
+    doc.save(path)
+    return EditSession(path)
+
+
+def test_render_all_shows_every_page_of_a_long_block(api, tmp_path):
+    s, c = api(_long_block_session(tmp_path))
+    fmt = s.format().__dict__
+    r = c.post("/api/render/all", json={"page": 0, "text": s.page_text(0), "format": fmt}).json()
+    total = len(PdfReader(tmp_path / "out.pdf").pages)
+    mapping = rendering.render_full(s.doc, s.format(), tmp_path / "check.pdf", tmp_path)[0]
+    assert total >= 4 and mapping[3] >= 3
+    # da página do 1º bloco até a página onde começa o próximo bloco visível (bloco 3), inclusive
+    assert r["pages"] == list(range(0, mapping[3] + 1)) and len(r["images"]) == len(r["pages"])
+    # última página do original: sem próximo bloco, vai até o fim do PDF
+    r = c.post("/api/render/all", json={"page": 2, "text": s.page_text(2), "format": fmt}).json()
+    assert r["pages"] == list(range(mapping[4], total))
+
+
+@pytest.mark.parametrize("host", ["evil.example", "evil.example:{port}", "127.0.0.1:1", "localhost"])
+def test_foreign_host_is_403(api, tmp_path, host):
+    s, c = api()
+    port = c.base_url.port
+    path = tmp_path / "document.json"
+    before = path.read_bytes()
+    h = {"Host": host.format(port=port)}
+    r = c.get("/api/page", params={"n": 0}, headers=h)
+    assert r.status_code == 403 and "error" in r.json()
+    assert c.get("/", headers=h).status_code == 403
+    r = c.post("/api/save", json={"page": 1, "text": s.page_text(1), "format": s.format().__dict__}, headers=h)
+    assert r.status_code == 403 and path.read_bytes() == before
+    assert c.get("/api/state", headers={"Host": f"localhost:{port}"}).status_code == 200
+    assert c.get("/api/state", headers={"Host": f"LOCALHOST:{port}"}).status_code == 200
+
+
+def test_cli_edit_start_errors_are_messages(tmp_path, capsys):
+    import socket
+
+    assert cli.main(["edit", str(tmp_path / "nada.json"), "-o", "x.pdf", "--no-browser"]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("ocrpdf: erro:") and "não encontrado" in err and "Traceback" not in err
+    (tmp_path / "ruim.json").write_text("{", encoding="utf-8")
+    assert cli.main(["edit", str(tmp_path / "ruim.json"), "-o", "x.pdf", "--no-browser"]) == 1
+    assert "ocrpdf: erro:" in capsys.readouterr().err
+    sess = _doc(tmp_path)
+    with socket.socket() as busy:
+        busy.bind(("127.0.0.1", 0))
+        busy.listen()
+        port = busy.getsockname()[1]
+        assert cli.main(["edit", str(sess.path), "-o", "x.pdf", "--no-browser", "--port", str(port)]) == 1
+    err = capsys.readouterr().err
+    assert "ocrpdf: erro:" in err and str(port) in err and "--port" in err

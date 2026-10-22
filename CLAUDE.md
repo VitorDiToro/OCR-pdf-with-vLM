@@ -63,16 +63,23 @@ Edição do `document.json`: `ocrpdf edit <work>/document.json -o final.pdf [--p
 página do original (`source.page`); à esquerda, o JSON compacto dos blocos da página (só texto,
 marcas ligadas e `style` fora do padrão; mesmo número e `kind` de blocos ao salvar, remover =
 ocultar); à direita, abas Resultado e Original (escaneado, blocos numerados). Botões: Salvar
-(atômico; cria `document.orig.json` uma vez; recusa se o arquivo mudou no disco), Renderizar esta
-página (aproximado na paginação), Renderizar tudo (salva antes; igual ao `ocrpdf render`), Justificar
-todos os parágrafos, e por bloco negrito/itálico, justificar, quebra de página, + linha em branco,
-ocultar, tamanho (pt na escala da saída). A faixa de formato edita `document.output`. O original vem
-de `--pdf` ou de `doc.source_path` (gravado pelo `analyze`/`convert`; sem ele a aba Original avisa).
+(atômico; cria `document.orig.json` uma vez; se o arquivo mudou no disco, recusa com 409 e a página
+oferece **Recarregar do disco**: `POST /api/reload` relê o arquivo e descarta a memória; o texto e o
+formato da tela ficam, não salvos, e o próximo Salvar os grava sobre o conteúdo novo), Renderizar
+esta página (aproximado na paginação; fora da 1ª página do documento, com cabeçalho mesmo se
+`header_on_first_page` é falso), Renderizar tudo (salva antes; igual ao `ocrpdf render`; mostra as
+páginas finais do 1º bloco da página até onde começa o bloco visível seguinte), Justificar todos os
+parágrafos, e por bloco negrito/itálico (estado efetivo: sobrescrito, ou título/todos os trechos
+marcados), justificar, quebra de página, + linha em branco, ocultar, tamanho (pt na escala da saída).
+A faixa de formato edita `document.output`. O original vem de `--pdf` ou de `doc.source_path`
+(gravado pelo `analyze`/`convert`; sem ele a aba Original avisa). Erros de início (documento
+inexistente ou inválido, porta ocupada) saem como `ocrpdf: erro: …`, código 1.
 `convert`/`analyze` remontam o JSON a partir do cache e apagam as edições (sem proteção, decisão do
 usuário). Campos editáveis à mão: por bloco, `style.align` (justify|left|center|right),
 `style.indent_em`, `style.font_size_pt` (escala medida), `style.page_break_before`,
 `style.space_before_lines` (linhas do corpo), `style.hidden`, `style.bold`/`style.italic`
-(sobrescrevem o bloco todo; `null` = padrão do tipo); por trecho (`spans`), `text`, `italic`, `bold`.
+(sobrescrevem o bloco todo; `false` tira também a marca dos trechos; `null` = padrão do tipo); por
+trecho (`spans`), `text`, `italic`, `bold`. NaN/Infinity são recusados (não são JSON).
 A família da fonte é só do documento (`font_family`). `source.page` é 0-based.
 
 Pasta de trabalho (padrão `<saída>_work/`): `pages/page_NNNN.json` (por página: OCR em cache +
@@ -110,7 +117,8 @@ src/ocrpdf/
   editor/         `ocrpdf edit`: compact (bloco ↔ forma compacta), session (EditSession: páginas,
                   salvar com validação/backup/conflito de mtime, sem HTTP), rendering (página
                   isolada e tudo, imagens via pypdfium2), server (ThreadingHTTPServer em 127.0.0.1,
-                  API JSON), static/ (index.html + app.js + style.css, JS puro).
+                  API JSON; recusa Host ≠ 127.0.0.1/localhost:PORTA (DNS rebinding) e POST sem
+                  application/json), static/ (index.html + app.js + style.css, JS puro).
   output_format.py  --page-size/--margin/--font-size: cópia ajustada do Document só para renderizar
                   (o document.json guarda o formato original medido; `apply_format` recebe o `Document.output`).
   render/html.py  Document → HTML+CSS; render/style.css (base); render/math.py (ziamath);

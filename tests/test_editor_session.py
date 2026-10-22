@@ -120,3 +120,60 @@ def test_format_roundtrip_and_validation(tmp_path):
     with pytest.raises(EditError):
         s.set_format(OutputFormat(page_size="XYZ"))
     assert s.format().page_size == "A4"
+
+
+def test_reload_reads_disk_and_discards_memory(tmp_path):
+    s, path = _make(tmp_path)
+    data = json.loads(s.page_text(1))
+    data[0]["spans"][0]["text"] = "em memória"
+    s.apply_page(1, json.dumps(data))
+    other = Document.load(path)
+    other.blocks[4].spans[0].text = "de fora"
+    other.save(path)
+    os.utime(path, ns=(1, path.stat().st_mtime_ns + 10**9))
+    with pytest.raises(ConflictError):
+        s.save()
+    s.reload()
+    assert not s.dirty
+    assert "de fora" in s.page_text(2) and "em memória" not in s.page_text(1)
+    s.apply_page(1, json.dumps(data))
+    s.save()   # sem conflito: a base agora é o arquivo novo
+    back = Document.load(path)
+    assert back.blocks[4].spans[0].text == "de fora" and back.blocks[2].spans[0].text == "em memória"
+
+
+def test_reload_failure_keeps_the_session(tmp_path):
+    s, path = _make(tmp_path)
+    s.apply_page(1, s.page_text(1))
+    before = s.doc
+    path.write_text("{ quebrado", encoding="utf-8")
+    with pytest.raises(EditError, match="document.json"):
+        s.reload()
+    assert s.doc is before and s.dirty
+
+
+def test_open_missing_or_broken_document_is_edit_error(tmp_path):
+    with pytest.raises(EditError, match="não encontrado"):
+        EditSession(tmp_path / "nada.json")
+    (tmp_path / "ruim.json").write_text("[1, 2", encoding="utf-8")
+    with pytest.raises(EditError, match="ruim.json"):
+        EditSession(tmp_path / "ruim.json")
+
+
+@pytest.mark.parametrize("value", ["NaN", "Infinity", "-Infinity", "1e999", "-1e999"])
+@pytest.mark.parametrize("field", ["indent_em", "font_size_pt"])
+def test_nan_and_infinity_in_blocks_are_refused(tmp_path, field, value):
+    s, path = _make(tmp_path)
+    text = s.page_text(1).replace('"kind": "paragraph"', f'"kind": "paragraph", "style": {{"{field}": {value}}}', 1)
+    with pytest.raises(EditError):
+        s.apply_page(1, text)
+    assert not s.dirty and "style" not in s.page_text(1)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+@pytest.mark.parametrize("field", ["margin_cm", "font_size_pt"])
+def test_nan_and_infinity_in_format_are_refused(tmp_path, field, value):
+    s, path = _make(tmp_path)
+    with pytest.raises(EditError):
+        s.set_format(OutputFormat(page_size="a4", **{field: value}))
+    assert s.format() == OutputFormat() and not s.dirty

@@ -106,6 +106,8 @@ def _exit_code(argv: list[str]) -> int:
 
 @pytest.mark.parametrize("opts,message", [
     (["--font-size", "0"], "o tamanho da fonte deve ser positivo"),
+    (["--font-size", "nan"], "o tamanho da fonte deve ser positivo"),
+    (["--page-size", "a4", "--margin", "nan"], "a margem deve ser um número finito"),
     (["--font-size", "doze"], "tamanho de fonte inválido: doze"),
     (["--page-size", "6x6", "--margin", "2.5"], "margem de 2.5 cm deixa menos de 3 cm de área de texto"),
 ])

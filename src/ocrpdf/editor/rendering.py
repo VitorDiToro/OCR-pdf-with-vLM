@@ -36,14 +36,17 @@ def render_page_images(doc: Document, indices: list[int], fmt: OutputFormat, bas
     """
     tmp = copy.copy(doc)
     tmp.blocks = [doc.blocks[i] for i in indices]
+    if 0 not in indices:
+        tmp.header_on_first_page = True   # a prévia não começa na 1ª página do documento
     pos = indices.index(highlight) if highlight in indices else None
     rendered = layout(apply_format(tmp, fmt), base_dir, block_ids=pos is not None, highlight=pos)
     pdf = rendered.write_pdf()
     return pdf_page_images(pdf, list(range(len(rendered.pages))), dpi)
 
 
-def render_full(doc: Document, fmt: OutputFormat, out_pdf: Path, base_dir: Path) -> dict[int, int]:
-    """Grava o PDF do documento inteiro; devolve bloco → página final (0-based) dos blocos visíveis."""
+def render_full(doc: Document, fmt: OutputFormat, out_pdf: Path, base_dir: Path) -> tuple[dict[int, int], int]:
+    """Grava o PDF do documento inteiro; devolve bloco → página final (0-based) dos blocos visíveis
+    e o número de páginas."""
     rendered = layout(apply_format(doc, fmt), base_dir, block_ids=True)
     rendered.write_pdf(out_pdf)
     mapping: dict[int, int] = {}
@@ -51,7 +54,22 @@ def render_full(doc: Document, fmt: OutputFormat, out_pdf: Path, base_dir: Path)
         for name in page.anchors:
             if name.startswith("b") and name[1:].isdigit():
                 mapping.setdefault(int(name[1:]), n)
-    return mapping
+    return mapping, len(rendered.pages)
+
+
+def final_pages(mapping: dict[int, int], indices: list[int], page_count: int) -> list[int]:
+    """Páginas do PDF final (0-based) com os blocos `indices` de `doc.blocks`.
+
+    Vão da página do 1º bloco visível até a página onde começa o próximo bloco visível depois do
+    último deles, inclusive (ele pode começar no meio dela; um bloco longo cobre as do meio); sem
+    próximo, até a última página. Vazio se nenhum dos blocos é visível.
+    """
+    shown = [mapping[i] for i in indices if i in mapping]
+    if not shown:
+        return []
+    nxt = min((i for i in mapping if i > max(indices)), default=None)
+    end = mapping[nxt] if nxt is not None else page_count - 1
+    return list(range(min(shown), max(end, max(shown)) + 1))
 
 
 def original_image(pdf: Path, page: int, dpi: int = 100) -> tuple[bytes, float, float]:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from copy import deepcopy
 from dataclasses import replace
 
@@ -79,7 +80,8 @@ def _span(d: object) -> Span:
 
 
 def _is_num(v: object) -> bool:
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+    """Número finito (sem bool, NaN nem infinito: 1e999 vira infinito no json.loads)."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
 
 
 def _style(base: BlockStyle, d: object) -> BlockStyle:
@@ -90,7 +92,7 @@ def _style(base: BlockStyle, d: object) -> BlockStyle:
     if v["align"] not in _ALIGNS:
         raise ValueError(f"align deve ser um de {', '.join(_ALIGNS)}")
     if not _is_num(v["indent_em"]):
-        raise ValueError("indent_em deve ser número")
+        raise ValueError("indent_em deve ser um número finito")
     v["indent_em"] = float(v["indent_em"])
     fs = v["font_size_pt"]
     if fs is not None:

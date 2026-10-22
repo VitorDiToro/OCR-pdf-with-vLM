@@ -27,12 +27,26 @@ def output_scale(doc: Document, fmt: OutputFormat) -> float:
     return 1.0
 
 
+def _no_constant(name: str) -> None:
+    """json.loads aceita NaN/Infinity, que não são JSON e corromperiam o document.json."""
+    raise EditError(f"{name} não é um número válido em JSON")
+
+
 class EditSession:
     def __init__(self, path: Path) -> None:
         self.path = Path(path)
-        self.doc = Document.load(self.path)
-        self.dirty = False
-        self._mtime = self.path.stat().st_mtime_ns
+        self.reload()
+
+    def reload(self) -> None:
+        """Lê o arquivo do disco e descarta as alterações em memória; se falhar, nada muda."""
+        try:
+            mtime = self.path.stat().st_mtime_ns   # antes de ler: se mudar no meio, o salvar recusa
+            doc = Document.load(self.path)
+        except FileNotFoundError:
+            raise EditError(f"documento não encontrado: {self.path}") from None
+        except (OSError, ValueError, TypeError, AttributeError, KeyError) as e:
+            raise EditError(f"não foi possível ler {self.path}: {e}") from e
+        self.doc, self._mtime, self.dirty = doc, mtime, False
 
     # --- consulta ---------------------------------------------------------
 
@@ -62,7 +76,7 @@ class EditSession:
     def apply_page(self, page: int, text: str) -> None:
         indices = self.page_indices(page)
         try:
-            data = json.loads(text)
+            data = json.loads(text, parse_constant=_no_constant)
         except json.JSONDecodeError as e:
             raise EditError(f"JSON inválido na linha {e.lineno}, coluna {e.colno}: {e.msg}") from e
         if not isinstance(data, list):
@@ -107,7 +121,10 @@ class EditSession:
 
     def save(self) -> None:
         if self.path.stat().st_mtime_ns != self._mtime:
-            raise ConflictError("o arquivo mudou no disco desde que foi aberto; recarregue")
+            raise ConflictError(
+                "o document.json mudou no disco desde que foi aberto ou gravado (outro programa ou outra "
+                "janela); use Recarregar do disco e salve de novo"
+            )
         backup = self.path.with_name("document.orig.json")
         if not backup.exists():
             backup.write_bytes(self.path.read_bytes())

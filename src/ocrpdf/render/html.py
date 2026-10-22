@@ -121,13 +121,13 @@ class _HtmlRenderer:
             tag = "h1" if b.kind == "title" else f"h{min(6, max(2, b.level))}"
             ruled = " ".join(c for c, r in (("rule-above", b.style.rule_above), ("rule-below", b.style.rule_below)) if r)
             cls = f' class="{ruled}"' if ruled else ""
-            inner = f"<{tag}{cls}{style}>{self._spans(b.spans, size)}</{tag}>"
+            inner = f"<{tag}{cls}{style}>{self._text(b, size)}</{tag}>"
         elif b.kind == "paragraph":
-            return self._ruled(b, f"<p{style}>{self._spans(b.spans, size)}{self._trailing(b)}</p>")
+            return self._ruled(b, f"<p{style}>{self._text(b, size)}{self._trailing(b)}</p>")
         elif b.kind == "list_item":
-            return self._ruled(b, f'<p class="li"{style}>{self._spans(b.spans, size)}{self._trailing(b)}</p>')
+            return self._ruled(b, f'<p class="li"{style}>{self._text(b, size)}{self._trailing(b)}</p>')
         elif b.kind == "caption":
-            inner = f'<p class="caption"{style}>{self._spans(b.spans, size)}</p>'
+            inner = f'<p class="caption"{style}>{self._text(b, size)}</p>'
         elif b.kind == "table":
             inner = f'<div class="table">{b.html}</div>'
         elif b.kind == "formula":
@@ -190,16 +190,23 @@ class _HtmlRenderer:
 
     # -- trechos e notas
 
-    def _spans(self, spans: list[Span], size_pt: float, allow_float: bool = True) -> str:
+    def _text(self, b: Block, size_pt: float) -> str:
+        """Trechos de um bloco de texto. O sobrescrito `False` do bloco (sem negrito / sem itálico) vale
+        também para as marcas dos trechos: o <b>/<i> deles reaplicaria o que o bloco tirou."""
+        return self._spans(b.spans, size_pt, bold=b.style.bold is not False, italic=b.style.italic is not False)
+
+    def _spans(self, spans: list[Span], size_pt: float, allow_float: bool = True,
+               bold: bool = True, italic: bool = True) -> str:
+        """`bold`/`italic` False: ignora essas marcas dos trechos."""
         out = []
         for s in spans:
             if s.math:
                 out.append(math_img(s.text, size_pt, True))
                 continue
             text = escape(s.text, quote=False)
-            if s.italic:
+            if s.italic and italic:
                 text = f"<i>{text}</i>"
-            if s.bold:
+            if s.bold and bold:
                 text = f"<b>{text}</b>"
             if s.sup:
                 text = f"<sup>{text}</sup>"

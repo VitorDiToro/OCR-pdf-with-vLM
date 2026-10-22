@@ -104,7 +104,7 @@ class PageGeometry:
 class OutputFormat:
     """Formato de saída escolhido no editor (o original fica em `Document.page` etc.)."""
 
-    page_size: str = "original"       # original | A4 | Letter | ...
+    page_size: str = "original"       # original | a4 | <largura>x<altura> em cm (output_format.parse_page_size)
     margin_cm: float = 2.5
     font_size_pt: float | None = None
     header: bool = True
@@ -128,7 +128,7 @@ class Document:
     blocks: list[Block] = field(default_factory=list)
     notes: dict[str, Note] = field(default_factory=dict)
     output: OutputFormat | None = None
-    source_path: str = ""             # PDF de origem (preenchido à mão ou pelo editor)
+    source_path: str = ""             # PDF escaneado de origem (gravado pelo analyze/convert, ou à mão); o editor lê
     schema_version: int = SCHEMA_VERSION
 
     def save(self, path: Path) -> None:

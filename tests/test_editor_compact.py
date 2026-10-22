@@ -52,6 +52,8 @@ def test_missing_field_means_default():
     ({"kind": "paragraph", "style": {"algin": "left"}}, "campo desconhecido: algin"),
     ({"kind": "paragraph", "style": {"align": "middle"}}, "align"),
     ({"kind": "paragraph", "style": {"font_size_pt": -3}}, "font_size_pt"),
+    ({"kind": "paragraph", "style": {"font_size_pt": float("inf")}}, "font_size_pt"),
+    ({"kind": "paragraph", "style": {"indent_em": float("nan")}}, "indent_em"),
     ({"kind": "paragraph", "style": {"space_before_lines": -1}}, "space_before_lines"),
     ({"kind": "paragraph", "style": {"hidden": "sim"}}, "hidden"),
     ({"kind": "paragraph", "spans": [{"italic": True}]}, "text"),

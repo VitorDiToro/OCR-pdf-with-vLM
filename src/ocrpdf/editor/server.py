@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import dataclasses
+import errno
 import json
 import logging
+import math
 import mimetypes
 import threading
 import webbrowser
@@ -40,7 +42,7 @@ class _App:
         # pypdfium2 não é thread-safe: toda chamada que rasteriza PDF (original_image, pdf_page_images,
         # render_page_images) passa por este lock. Ordem de aquisição: state_lock -> pdf_lock.
         self.pdf_lock = threading.Lock()
-        self.images: dict[str, list[bytes]] = {}
+        self.images: dict[str, list[bytes]] = {}   # imagens da última renderização (por token)
         self._counter = 0
         self._sizes: dict[int, tuple[float, float]] = {}
 
@@ -102,9 +104,10 @@ class _App:
         text = body.get("text")
         if not isinstance(text, str):
             raise _HttpError(400, "campo 'text' ausente")
+        fmt = _format(body.get("format")) if with_format else None   # tipos conferidos antes de mexer na sessão
         self.session.apply_page(page, text)
-        if with_format:
-            self.session.set_format(_format(body.get("format")))
+        if fmt is not None:
+            self.session.set_format(fmt)
         return page
 
     def save(self, body: dict) -> int:
@@ -125,12 +128,19 @@ class _App:
                     s.doc, s.page_indices(page), s.format(), self.base_dir, highlight=highlight)
         return {"images": self.keep_images(images)}
 
+    def reload(self) -> dict:
+        """Relê o document.json do disco (saída do conflito de mtime); descarta a memória e as imagens."""
+        with self.state_lock:
+            self.session.reload()
+            self.images = {}
+            return self.state()
+
     def render_all(self, body: dict) -> dict:
         s = self.session
         with self.state_lock:
             page = self.save(body)
-            mapping = rendering.render_full(s.doc, s.format(), self.output, self.base_dir)
-            wanted = sorted({mapping[i] for i in s.page_indices(page) if i in mapping})
+            mapping, count = rendering.render_full(s.doc, s.format(), self.output, self.base_dir)
+            wanted = rendering.final_pages(mapping, s.page_indices(page), count)
         with self.pdf_lock:
             images = rendering.pdf_page_images(self.output, wanted) if wanted else []
         return {"pdf": str(self.output), "pages": wanted, "images": self.keep_images(images)}
@@ -143,16 +153,19 @@ def _int(value, name: str) -> int:
         raise _HttpError(400, f"'{name}' deve ser um número inteiro") from None
 
 
+def _finite(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
 def _format(data) -> OutputFormat:
     if not isinstance(data, dict):
         raise _HttpError(400, "campo 'format' ausente")
     known = {f.name for f in dataclasses.fields(OutputFormat)}
     fmt = OutputFormat(**{k: v for k, v in data.items() if k in known})
-    number = (int, float)
-    if (not isinstance(fmt.page_size, str) or isinstance(fmt.margin_cm, bool) or not isinstance(fmt.margin_cm, number)
-            or not (fmt.font_size_pt is None or (isinstance(fmt.font_size_pt, number) and not isinstance(fmt.font_size_pt, bool)))
+    if (not isinstance(fmt.page_size, str) or not _finite(fmt.margin_cm)
+            or not (fmt.font_size_pt is None or _finite(fmt.font_size_pt))
             or not isinstance(fmt.header, bool)):
-        raise _HttpError(400, "formato inválido: page_size texto, margin_cm e font_size_pt números, header booleano")
+        raise _HttpError(400, "formato inválido: page_size texto, margin_cm e font_size_pt números finitos, header booleano")
     return fmt
 
 
@@ -177,6 +190,10 @@ def _handler(app: _App) -> type[BaseHTTPRequestHandler]:
             url = urlparse(self.path)
             query = {k: v[0] for k, v in parse_qs(url.query).items()}
             try:
+                if not self._local_host():
+                    # DNS rebinding: um site cujo nome passa a apontar para 127.0.0.1 chega aqui com o
+                    # Host dele, e não o nosso; sem isso, poderia ler e gravar como se fosse a página
+                    raise _HttpError(403, "Host não permitido: abra o editor por 127.0.0.1 ou localhost")
                 if self.command == "POST" and not self._is_json():
                     # exigir application/json força um preflight CORS (que não respondemos): páginas de
                     # outras origens não conseguem gravar nem renderizar por aqui
@@ -187,13 +204,18 @@ def _handler(app: _App) -> type[BaseHTTPRequestHandler]:
                 raise _HttpError(404, "não encontrado")
             except _HttpError as e:
                 self._json({"error": str(e)}, e.status)
-            except ConflictError as e:
-                self._json({"error": str(e)}, 409)
+            except ConflictError as e:   # "conflict": a página oferece recarregar (o 409 de ocupado não tem)
+                self._json({"error": str(e), "conflict": True}, 409)
             except (EditError, ValueError) as e:
                 self._json({"error": str(e)}, 400)
             except Exception as e:   # falha inesperada (WeasyPrint, disco, pdfium): resposta JSON, não conexão caída
                 _log.exception("erro interno em %s %s", self.command, self.path)
                 self._json({"error": f"erro interno: {e}"}, 500)
+
+        def _local_host(self) -> bool:
+            port = self.server.server_address[1]
+            host = (self.headers.get("Host") or "").strip().lower()
+            return host in (f"127.0.0.1:{port}", f"localhost:{port}")
 
         def _is_json(self) -> bool:
             ctype = self.headers.get("Content-Type") or ""
@@ -202,7 +224,7 @@ def _handler(app: _App) -> type[BaseHTTPRequestHandler]:
         def _body(self) -> dict:
             try:
                 n = int(self.headers.get("Content-Length") or 0)
-                data = json.loads(self.rfile.read(n) or b"{}")
+                data = json.loads(self.rfile.read(n) or b"{}")   # NaN/Infinity: recusados em _format e na sessão
             except ValueError:
                 raise _HttpError(400, "corpo da requisição não é um JSON válido") from None
             if not isinstance(data, dict):
@@ -280,6 +302,7 @@ def _handler(app: _App) -> type[BaseHTTPRequestHandler]:
                 (lambda p: p == "/api/page", page_post),
                 (lambda p: p == "/api/justify-all", justify),
                 (lambda p: p == "/api/save", save),
+                (lambda p: p == "/api/reload", lambda p, q: self._json(app.reload())),
                 (lambda p: p == "/api/render/page", lambda p, q: self._rendering(app.render_page, self._body())),
                 (lambda p: p == "/api/render/all", lambda p, q: self._rendering(app.render_all, self._body())),
             ])
@@ -305,12 +328,22 @@ def _find_original(session: EditSession, pdf: Path | None) -> Path | None:
 
 
 def serve(document: Path, output: Path, pdf: Path | None, port: int = 0, open_browser: bool = True) -> None:
-    """Abre o editor e bloqueia até Ctrl+C."""
-    session = EditSession(document)
+    """Abre o editor e bloqueia até Ctrl+C. Erros de início viram RuntimeError (a CLI mostra a mensagem)."""
+    try:
+        session = EditSession(document)
+    except EditError as e:
+        raise RuntimeError(str(e)) from None
     original = _find_original(session, pdf)
     if original is None:
         print("ocrpdf: sem PDF original (use --pdf); a aba Original ficará indisponível")
-    server = make_server(session, output, original, port)
+    try:
+        server = make_server(session, output, original, port)
+    except (OSError, OverflowError) as e:
+        if getattr(e, "errno", None) == errno.EADDRINUSE:
+            raise RuntimeError(f"a porta {port} de 127.0.0.1 já está em uso; escolha outra com --port "
+                               "(0 = uma livre)") from None
+        raise RuntimeError(f"não foi possível abrir o servidor em 127.0.0.1:{port}: "
+                           f"{getattr(e, 'strerror', None) or e}") from None
     url = f"http://127.0.0.1:{server.server_address[1]}/"
     print(f"Editor em {url}  (Ctrl+C para sair)")
     if open_browser:

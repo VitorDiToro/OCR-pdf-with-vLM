@@ -6,6 +6,7 @@ O `document.json` guarda sempre o formato original medido; aqui se produz uma c�
 from __future__ import annotations
 
 import copy
+import math
 import re
 
 from .model import Block, Document, OutputFormat, PageGeometry
@@ -37,6 +38,10 @@ def parse_page_size(spec: str) -> tuple[float, float] | None:
 def apply_output_format(doc: Document, page_size: tuple[float, float] | None, margin_cm: float = 2.5,
                         font_size_pt: float | None = None) -> Document:
     """Devolve uma cópia de `doc` com a página e/ou as fontes ajustadas (o original não muda)."""
+    if not math.isfinite(margin_cm):
+        raise ValueError("a margem deve ser um número finito")
+    if font_size_pt is not None and not (math.isfinite(font_size_pt) and font_size_pt > 0):
+        raise ValueError("o tamanho da fonte deve ser um número positivo")
     out = copy.deepcopy(doc)
     if page_size is not None:
         w, h = page_size
@@ -46,8 +51,6 @@ def apply_output_format(doc: Document, page_size: tuple[float, float] | None, ma
                              f"na página de {w / _PT_PER_CM:.1f} x {h / _PT_PER_CM:.1f} cm")
         out.page = PageGeometry(w, h, m, m, m, m)
     if font_size_pt is not None:
-        if font_size_pt <= 0:
-            raise ValueError("o tamanho da fonte deve ser positivo")
         _scale_fonts(out, font_size_pt / doc.body_font_pt)
     return out
 

@@ -43,6 +43,8 @@ header { flex: none; }
 .bar-top { background: var(--bar-top); }
 .bar-format { background: var(--bar-format); }
 .bar-block { background: var(--bar-block); }
+.bar-conflict { background: #fdeeee; color: #7a1f1f; flex-wrap: nowrap; }
+.bar-conflict button { flex: none; font-weight: 600; }
 .bar-label { font-weight: 600; color: #357; }
 .hint { color: var(--muted); font-size: 12px; }
 .nav, .group { display: inline-flex; align-items: center; gap: 6px; }

@@ -184,12 +184,30 @@ function setStyle(b, key, value) {
   else delete b.style;
 }
 
-/** Negrito efetivo do bloco: o sobrescrito, ou o padrão do tipo (títulos saem em negrito). */
+/** Trechos que decidem se o bloco "está" em negrito/itálico: com texto visível, fora chamadas de nota e fórmulas. */
+function markSpans(b) {
+  const spans = Array.isArray(b.spans) ? b.spans : [];
+  return spans.filter((s) => s && typeof s === 'object' && typeof s.text === 'string'
+    && s.text.trim() !== '' && !s.note && !s.math);
+}
+function allMarked(b, mark) {
+  const spans = markSpans(b);
+  return spans.length > 0 && spans.every((s) => s[mark] === true);
+}
+/**
+ * Negrito efetivo do bloco: o sobrescrito; sem ele, títulos (o CSS põe negrito) ou todos os trechos em
+ * negrito. Com `false` o render tira também o negrito dos trechos (render/html.py).
+ */
 function isBold(b) {
   const v = styleOf(b).bold;
-  return typeof v === 'boolean' ? v : b.kind === 'title' || b.kind === 'heading';
+  if (typeof v === 'boolean') return v;
+  return b.kind === 'title' || b.kind === 'heading' || allMarked(b, 'bold');
 }
-function isItalic(b) { return styleOf(b).italic === true; }
+/** Itálico efetivo do bloco: o sobrescrito, ou todos os trechos em itálico. */
+function isItalic(b) {
+  const v = styleOf(b).italic;
+  return typeof v === 'boolean' ? v : allMarked(b, 'italic');
+}
 function isJustified(b) { const a = styleOf(b).align; return a === undefined || a === 'justify'; }
 function isHidden(b) { return styleOf(b).hidden === true; }
 function hasBreak(b) { return styleOf(b).page_break_before === true; }
@@ -284,7 +302,11 @@ const S = {
 const ui = {};
 
 class ApiError extends Error {
-  constructor(status, message) { super(message); this.status = status; }
+  constructor(status, message, data) {
+    super(message);
+    this.status = status;
+    this.conflict = Boolean(data && data.conflict);   // o document.json mudou no disco (409 do salvar)
+  }
 }
 
 async function api(method, url, body) {
@@ -301,7 +323,7 @@ async function api(method, url, body) {
   }
   let data = null;
   try { data = await res.json(); } catch (e) { /* corpo vazio ou não JSON */ }
-  if (!res.ok) throw new ApiError(res.status, (data && data.error) || `erro ${res.status}`);
+  if (!res.ok) throw new ApiError(res.status, (data && data.error) || `erro ${res.status}`, data);
   return data;
 }
 
@@ -346,7 +368,7 @@ function updateControls() {
   for (const b of [ui.save, ui.renderPage, ui.renderAll, ui.justifyAll, ui.pageSel]) b.disabled = busy || none;
   ui.prev.disabled = busy || none || S.i <= 0;
   ui.next.disabled = busy || none || S.i >= S.pages.length - 1;
-  for (const b of [ui.leaveSave, ui.leaveDiscard, ui.leaveStay]) b.disabled = busy;
+  for (const b of [ui.leaveSave, ui.leaveDiscard, ui.leaveStay, ui.reload]) b.disabled = busy;
 }
 
 /** Executa uma chamada ao servidor com os botões desabilitados e o estado na faixa. */
@@ -363,6 +385,7 @@ async function run(label, fn) {
     return true;
   } catch (e) {
     showError(e);
+    if (e instanceof ApiError && e.conflict) ui.conflict.hidden = false;   // oferece recarregar
     return false;
   } finally {
     clearInterval(S.timer);
@@ -734,6 +757,7 @@ function formatOrError() {
 async function afterSaved(text, fmt) {
   S.savedFormat = fmt;
   S.sessionDirty = false;
+  ui.conflict.hidden = true;
   await loadPage(S.i, true, text);
 }
 
@@ -782,10 +806,12 @@ async function renderAll() {
     }
     await afterSaved(text, fmt);
     const finals = r.pages.map((p) => p + 1);
+    // as páginas vêm em sequência: da do 1º bloco até a que tem o começo do bloco seguinte
+    const where = finals.length > 1 ? `nas páginas ${finals[0]} a ${finals[finals.length - 1]}` : `na página ${finals[0]}`;
     ui.resultInfo.replaceChildren(
       'Salvo e PDF gravado em ', Object.assign(document.createElement('code'), { textContent: r.pdf }), '. ',
       finals.length
-        ? `Os blocos desta página caem na${finals.length > 1 ? 's páginas' : ' página'} ${finals.join(', ')} do PDF final.`
+        ? `Os blocos desta página estão ${where} do PDF final (a última pode trazer o começo da página seguinte do original).`
         : 'Nenhum bloco visível desta página no PDF final.',
     );
     showResults(r.images, finals.map((p) => `página ${p} do PDF final`));
@@ -806,6 +832,33 @@ async function justifyAll() {
     showMessage(r.changed
       ? `${r.changed} parágrafo(s) justificado(s) em todo o documento; falta salvar.`
       : 'Todos os parágrafos já estavam justificados.', 'ok');
+  });
+}
+
+/**
+ * Saída do conflito (o document.json mudou no disco): o servidor relê o arquivo e descarta a memória.
+ * O texto e o formato da tela ficam como estão, "não salvos"; o próximo Salvar os grava sobre o arquivo novo.
+ */
+async function reloadFromDisk() {
+  await run('recarregando…', async () => {
+    const st = await api('POST', '/api/reload', {});
+    ui.conflict.hidden = true;
+    clearResults();   // as imagens da renderização anterior foram descartadas no servidor
+    const gone = S.page;
+    setState(st);
+    if (!S.pages.length) throw new ApiError(0, 'o document.json recarregado não tem blocos');
+    const i = S.pages.indexOf(gone);
+    if (i >= 0) {
+      await loadPage(i, true, null);   // sentText null: o texto da tela nunca é trocado
+      ui.pageSel.value = String(i);
+      showMessage(textDirty() || formatDirty()
+        ? 'Recarregado do disco. O texto desta página continua na tela, não salvo: Salvar o grava sobre o conteúdo novo.'
+        : 'Recarregado do disco; esta página não tinha alterações.', 'ok');
+    } else {
+      const next = S.pages.findIndex((p) => p > gone);
+      await loadPage(next >= 0 ? next : S.pages.length - 1);
+      showMessage(`Recarregado do disco, mas a página ${gone + 1} não existe mais nele: o texto dela foi descartado.`, 'error');
+    }
   });
 }
 
@@ -843,6 +896,17 @@ function closeLeave() {
 
 // --- início --------------------------------------------------------------------------------
 
+/** Estado do documento vindo de /api/state ou /api/reload: páginas, corpo medido, formato gravado. */
+function setState(st) {
+  S.pages = st.pages;
+  S.bodyFontPt = st.body_font_pt;
+  S.hasOriginal = st.has_original;
+  S.savedFormat = st.format;
+  S.sessionDirty = st.dirty;
+  ui.pageSel.replaceChildren(...S.pages.map((p, i) => new Option(String(p + 1), String(i))));
+  ui.pageCount.textContent = S.pages.length ? String(S.pages[S.pages.length - 1] + 1) : '0';
+}
+
 function setFormatBar(fmt) {
   ui.fmtPage.value = fmt.page_size;
   ui.fmtMargin.value = String(fmt.margin_cm);
@@ -879,7 +943,7 @@ function bind() {
     paneResult: $('pane-result'), paneOriginal: $('pane-original'),
     resultInfo: $('result-info'), resultPages: $('result-pages'),
     origInfo: $('orig-info'), origWrap: $('orig-wrap'), origImg: $('orig-img'), origBoxes: $('orig-boxes'),
-    leave: $('leave'), leaveText: $('leave-text'),
+    leave: $('leave'), leaveText: $('leave-text'), conflict: $('conflict'), reload: $('reload'),
     leaveSave: $('leave-save'), leaveDiscard: $('leave-discard'), leaveStay: $('leave-stay'),
   });
 
@@ -890,6 +954,7 @@ function bind() {
   ui.renderPage.addEventListener('click', renderPage);
   ui.renderAll.addEventListener('click', renderAll);
   ui.justifyAll.addEventListener('click', justifyAll);
+  ui.reload.addEventListener('click', reloadFromDisk);
 
   for (const el of [ui.fmtPage, ui.fmtMargin, ui.fmtBody, ui.fmtHeader]) {
     el.addEventListener('input', onFormatChanged);
@@ -984,15 +1049,9 @@ async function start() {
     updateStatus();
     return;
   }
-  S.pages = st.pages;
-  S.bodyFontPt = st.body_font_pt;
-  S.hasOriginal = st.has_original;
-  S.savedFormat = st.format;
-  S.sessionDirty = st.dirty;
+  setState(st);
   document.title = `ocrpdf edit — ${st.title}`;
   setFormatBar(st.format);
-  ui.pageSel.replaceChildren(...S.pages.map((p, i) => new Option(String(p + 1), String(i))));
-  ui.pageCount.textContent = S.pages.length ? String(S.pages[S.pages.length - 1] + 1) : '0';
   selectTab(S.hasOriginal ? 'original' : 'result');
   if (!S.pages.length) {
     showMessage('o documento não tem blocos', 'error');
