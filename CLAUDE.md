@@ -40,6 +40,7 @@ uv run pytest                         # testes
 uv run ocrpdf convert in.pdf -o out.pdf -v       # OCR + montagem + PDF
 uv run ocrpdf analyze in.pdf -w work/            # só OCR + document.json
 uv run ocrpdf render work/document.json -o out.pdf   # re-renderiza após editar o JSON
+uv run ocrpdf edit work/document.json -o out.pdf     # editor no navegador (127.0.0.1)
 uv run python scripts/eval_italic.py --pdf in.pdf --work work --gold gabarito.json --pages pares
 ```
 
@@ -50,16 +51,29 @@ Itálico (etapa 2): `--italic-rule slant` (padrão, só o servidor do OCR) | `r1
 servidor em :8001: `scripts/serve_pair.sh`, ou `--switch restart` para a app subir/derrubar cada
 servidor; `--italic-server`, `--italic-model`, `--italic-hf-model`); `--no-italic` = itálico do OCR
 sem conferir na imagem.
-Formato de saída (`convert` e `render`; só na renderização, o `document.json` fica no original):
+Formato de saída (`convert` e `render`): `convert` grava as opções em `document.output`
+(`OutputFormat`: page_size, margin_cm, font_size_pt, header); `render` usa o `output` gravado e as
+opções passadas valem por cima (não gravam nada); o resto do `document.json` fica no original medido.
 `--page-size original|a4|<L>x<A>` (cm, aceita vírgula), `--margin 2.5` (cm; só com tamanho
 diferente de `original`), `--font-size PT` (escala corpo, títulos, notas e cabeçalho). Em `--margin`
 e `--font-size` o decimal é com **ponto** (decisão do usuário; está na ajuda).
 
-Edição à mão do `document.json` (depois, só `ocrpdf render`; `convert`/`analyze` remontam o JSON a
-partir do cache e apagam as edições): por bloco, `style.align` (justify|left|center|right),
-`style.indent_em`, `style.font_size_pt`, `style.page_break_before: true` (quebra de página antes do
-bloco); por trecho (`spans`), `text`, `italic`, `bold`. A família da fonte é só do documento
-(`font_family`). `source.page` é 0-based.
+Edição do `document.json`: `ocrpdf edit <work>/document.json -o final.pdf [--pdf original.pdf]
+[--port N] [--no-browser]` abre um editor local no navegador (só 127.0.0.1, sem CDN). Navega pela
+página do original (`source.page`); à esquerda, o JSON compacto dos blocos da página (só texto,
+marcas ligadas e `style` fora do padrão; mesmo número e `kind` de blocos ao salvar, remover =
+ocultar); à direita, abas Resultado e Original (escaneado, blocos numerados). Botões: Salvar
+(atômico; cria `document.orig.json` uma vez; recusa se o arquivo mudou no disco), Renderizar esta
+página (aproximado na paginação), Renderizar tudo (salva antes; igual ao `ocrpdf render`), Justificar
+todos os parágrafos, e por bloco negrito/itálico, justificar, quebra de página, + linha em branco,
+ocultar, tamanho (pt na escala da saída). A faixa de formato edita `document.output`. O original vem
+de `--pdf` ou de `doc.source_path` (gravado pelo `analyze`/`convert`; sem ele a aba Original avisa).
+`convert`/`analyze` remontam o JSON a partir do cache e apagam as edições (sem proteção, decisão do
+usuário). Campos editáveis à mão: por bloco, `style.align` (justify|left|center|right),
+`style.indent_em`, `style.font_size_pt` (escala medida), `style.page_break_before`,
+`style.space_before_lines` (linhas do corpo), `style.hidden`, `style.bold`/`style.italic`
+(sobrescrevem o bloco todo; `null` = padrão do tipo); por trecho (`spans`), `text`, `italic`, `bold`.
+A família da fonte é só do documento (`font_family`). `source.page` é 0-based.
 
 Pasta de trabalho (padrão `<saída>_work/`): `pages/page_NNNN.json` (por página: OCR em cache +
 medidas da probe regravadas a cada execução), `assets/` (recortes de figuras), `meta.json` (fonte
@@ -69,7 +83,7 @@ detectada), `italic/page_NNNN.json` (marcas do 2º modelo, só r1/r2), `document
 
 ```
 src/ocrpdf/
-  cli.py          argparse: convert | analyze | render (+ --page-size/--margin/--font-size,
+  cli.py          argparse: convert | analyze | render | edit (+ --page-size/--margin/--font-size,
                   validados antes do OCR)
   pipeline.py     Pipeline: rasteriza (pypdfium2, em série, lotes de workers*2) → engine.analyze
                   em ThreadPool (só páginas sem cache) → probe/filetes/recortes de todas as páginas
@@ -93,8 +107,12 @@ src/ocrpdf/
                   blocos, junção de parágrafos entre páginas/colunas, notas, níveis de título.
   htmlsafe.py     sanitiza HTML de tabelas (só tags de tabela + colspan/rowspan).
   model.py        Document/Block/Span/Note/BlockStyle/Rule/Source/PageGeometry + save/load tolerante.
+  editor/         `ocrpdf edit`: compact (bloco ↔ forma compacta), session (EditSession: páginas,
+                  salvar com validação/backup/conflito de mtime, sem HTTP), rendering (página
+                  isolada e tudo, imagens via pypdfium2), server (ThreadingHTTPServer em 127.0.0.1,
+                  API JSON), static/ (index.html + app.js + style.css, JS puro).
   output_format.py  --page-size/--margin/--font-size: cópia ajustada do Document só para renderizar
-                  (o document.json guarda o formato original medido).
+                  (o document.json guarda o formato original medido; `apply_format` recebe o `Document.output`).
   render/html.py  Document → HTML+CSS; render/style.css (base); render/math.py (ziamath);
   render/__init__  render_pdf() com WeasyPrint (import tardio).
   italic/         etapa 2, itálico por palavra: words (tokens dos Spans), slant (caixas de palavra
@@ -109,13 +127,15 @@ scripts/          serve_vllm.sh (um servidor; GPU_MEM pela VRAM livre; MAX_IMAGE
 ### Modelo intermediário (`model.py`)
 - `Document`: page (tamanho + margens em pt), font_family, body_font_pt, line_height,
   paragraph_gap_pt, columns, running_header(+_align), header_on_first_page, page_numbers, lang,
-  `blocks: list[Block]`, `notes: dict[id, Note]`.
+  `blocks: list[Block]`, `notes: dict[id, Note]`, `source_path` (PDF escaneado, absoluto),
+  `output: OutputFormat | None` (formato gravado: page_size, margin_cm, font_size_pt, header).
 - `Block.kind`: title | heading | paragraph | list_item | caption | table | formula | figure | endnote.
   `endnote` é um marcador de posição (`note=id`); o conteúdo fica em `doc.notes`.
   `trailing_notes`: notas de rodapé sem chamada, ancoradas no último bloco da página de origem.
 - `BlockStyle`: align, indent_em, font_size_pt, full_width, rule_above/rule_below (`Rule`:
   thickness_pt, gap_pt, left_em no em do corpo, right_frac relativo à área de texto),
-  page_break_before (só edição à mão; o render põe um `div.page-break` fora do `div.cols`, e
+  hidden (o render pula o bloco), space_before_lines (linhas do corpo antes do bloco), bold/italic
+  (`bool | None`, sobrescrevem o bloco inteiro), page_break_before (o render põe um `div.page-break` fora do `div.cols`, e
   nada antes do 1º bloco).
 - `Span`: text + italic/bold/sup/sub/math + `note` (id quando é chamada de nota).
 - `Note`: id ("n1"...), label ("1", "*", "a"...), kind footnote|endnote, page, blocks.
@@ -251,6 +271,11 @@ Feito e conferido:
   interface; numa execução assim o gnome-shell caiu e encerrou a sessão (servidores e Claude Code
   juntos). Só com um servidor, sem problema.
 
+- **Editor** (2026-10-22): `ocrpdf edit` implementado e coberto por testes de servidor/sessão/render
+  (sem navegador; o JS foi conferido à mão). Os 7 `document.json` de `docs_ocr` ganharam
+  `source_path`; o do Marx também `output` (14.4x21.6, margem 2, corpo 12.4, cabeçalho ligado):
+  `render` sem opções dá 11 páginas de 408,19 × 612,28 pt.
+
 Ainda não exercitado: ziamath inline, colunas, tabelas, figuras, presets `qwen25vl`/`qwen3vl`.
 
 ## Próximos passos
@@ -265,12 +290,13 @@ Ainda não exercitado: ziamath inline, colunas, tabelas, figuras, presets `qwen2
      documento (corpo ≤ 9 pt, ou itálico oblíquo sintético) antes de confiar na regra fora disso.
    - Herança de palavra curta na regra `slant` (revisão do PR #1): Benjamin pares 89,2 → 98,4 de
      cobertura, mas a precisão do Horkheimer cai para 96,6 (< 98,2 da referência). Não adotada.
-2. **Testes** restantes: `test_inline.py`, `test_notes.py` (split_label, link por página,
+2. Editor: v1 sem negrito/itálico parcial, sem editar notas, sem inserir/reordenar blocos.
+3. **Testes** restantes: `test_inline.py`, `test_notes.py` (split_label, link por página,
    endnotes, `[n]`, `*`), `test_vlm.py` com `httpx.MockTransport` (cerca, JSON truncado, escala
    pixels/norm1000), `test_assemble.py` com PageLayouts sintéticos (cabeçalho corrente, junção
    "Por mais" | "penetrantes que fossem", nota ligada ao título).
-3. Escrever o `README.md` (está vazio).
-4. Pendências menores conhecidas:
+4. Escrever o `README.md` (está vazio).
+5. Pendências menores conhecidas:
    - `inline.parse(strip_list_marker=...)` não é usado; remover ou usar em list-items.
    - `font_size_pt` por nota é ignorado em parte (o render usa a mediana das notas).
    - Notas longas que quebram de página: avaliar `footnote-policy` no CSS.
