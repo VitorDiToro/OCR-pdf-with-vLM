@@ -141,3 +141,86 @@ def test_page_break_before_survives_save_and_old_files_load_without_it(tmp_path:
         del b["style"]["page_break_before"]                   # document.json de antes do campo
     path.write_text(json.dumps(data))
     assert not any(b.style.page_break_before for b in Document.load(path).blocks)
+
+
+# --- ocultar bloco, linhas em branco, negrito/itálico do bloco ---------------
+
+def _page_text(pdf: Path) -> str:
+    return "".join(p.extract_text() for p in PdfReader(pdf).pages)
+
+
+def test_hidden_block_is_not_rendered(tmp_path: Path) -> None:
+    doc = _two_parts(1, None)
+    doc.blocks[2].style.hidden = True
+    out = tmp_path / "out.pdf"
+    render.render_pdf(doc, out, base_dir=tmp_path)
+    text = _page_text(out)
+    assert "Segunda parte" not in text
+    assert "Primeira parte" in text and "Texto curto da primeira" in text and "Texto curto da segunda" in text
+
+
+def test_hidden_block_keeps_its_trailing_notes_and_drops_its_own_calls(tmp_path: Path) -> None:
+    doc = _two_parts(1, None)
+    doc.notes = {"n1": Note("n1", "1", "footnote", 0, [Block("paragraph", [Span("TextoDaN1")])]),
+                 "n2": Note("n2", "2", "footnote", 0, [Block("paragraph", [Span("TextoDaN2")])])}
+    hidden = doc.blocks[1]
+    hidden.spans = [Span("Texto oculto"), Span("1", sup=True, note="n1")]
+    hidden.trailing_notes = ["n2"]
+    hidden.style.hidden = True
+    out = tmp_path / "out.pdf"
+    render.render_pdf(doc, out, base_dir=tmp_path)
+    text = _page_text(out)
+    assert "TextoDaN2" in text
+    assert "TextoDaN1" not in text and "Texto oculto" not in text
+
+
+def test_space_before_lines_adds_blank_lines(tmp_path: Path) -> None:
+    def second_y(lines: int) -> float:
+        doc = _two_parts(1, None)
+        doc.blocks[3].style.space_before_lines = lines
+        out = tmp_path / f"out{lines}.pdf"
+        render.render_pdf(doc, out, base_dir=tmp_path)
+        return next(y for t, _, y in _text_positions(out) if "da segunda" in t)
+
+    shift = second_y(0) - second_y(3)
+    assert shift == pytest.approx(3 * 1.2 * 10, abs=2)
+
+
+def test_block_bold_and_italic_override() -> None:
+    doc = _two_parts(1, None)
+    doc.blocks[0].style.bold = False
+    doc.blocks[1].style.italic = True
+    html = render.render_html(doc)
+    assert 'font-weight:normal' in html.split("<h2", 1)[1].split(">", 1)[0]
+    assert 'font-style:italic' in html.split("<p", 1)[1].split(">", 1)[0]
+    plain = render.render_html(_two_parts(1, None))
+    assert "font-weight" not in plain.split("<body>", 1)[1]
+    assert "font-style" not in plain.split("<body>", 1)[1]
+
+
+def test_new_fields_survive_save_and_old_files_load(tmp_path: Path) -> None:
+    from ocrpdf.model import OutputFormat
+
+    doc = _two_parts(1, None)
+    st = doc.blocks[1].style
+    st.hidden, st.space_before_lines, st.bold, st.italic = True, 2, True, False
+    doc.output = OutputFormat(page_size="A4", margin_cm=2.0, font_size_pt=12.0, header=False)
+    doc.source_path = "/tmp/x.pdf"
+    path = tmp_path / "document.json"
+    doc.save(path)
+    back = Document.load(path)
+    st = back.blocks[1].style
+    assert (st.hidden, st.space_before_lines, st.bold, st.italic) == (True, 2, True, False)
+    assert back.output == doc.output and back.source_path == "/tmp/x.pdf"
+
+    data = json.loads(path.read_text())
+    for key in ("output", "source_path"):
+        del data[key]
+    for b in data["blocks"]:
+        for key in ("hidden", "space_before_lines", "bold", "italic"):
+            del b["style"][key]
+    path.write_text(json.dumps(data))
+    old = Document.load(path)
+    st = old.blocks[1].style
+    assert (st.hidden, st.space_before_lines, st.bold, st.italic) == (False, 0, None, None)
+    assert old.output is None and old.source_path == ""

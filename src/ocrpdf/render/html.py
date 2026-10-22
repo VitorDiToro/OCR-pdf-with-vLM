@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import statistics
 from html import escape
 from importlib.resources import files
@@ -14,6 +15,8 @@ from .math import math_img
 _HEADING_EM = {1: 1.6, 2: 1.25, 3: 1.1}
 _HEADING_MARGIN_EM = {"top": 1.1, "bottom": 0.45}
 
+_TEXT_KINDS = ("paragraph", "list_item", "caption", "title", "heading")
+
 FONT_STACKS = {
     "serif": '"Liberation Serif", "Times New Roman", "DejaVu Serif", serif',
     "sans": '"Liberation Sans", Arial, Helvetica, "DejaVu Sans", sans-serif',
@@ -21,13 +24,27 @@ FONT_STACKS = {
 }
 
 
-def render_html(doc: Document) -> str:
-    return _HtmlRenderer(doc).render()
+def render_html(doc: Document, block_ids: bool = False, highlight: int | None = None) -> str:
+    """`block_ids`: o elemento principal do bloco i recebe id="b{i}"; `highlight`: contorna o bloco."""
+    return _HtmlRenderer(doc, block_ids, highlight).render()
+
+
+def block_font_pt(doc: Document, b: Block) -> float:
+    """Tamanho efetivo do bloco: o próprio, o do título (corpo × fator do nível) ou o corpo."""
+    if b.style.font_size_pt:
+        return b.style.font_size_pt
+    if b.kind in ("title", "heading"):
+        level = 1 if b.kind == "title" else min(6, max(2, b.level))
+        return doc.body_font_pt * _HEADING_EM.get(level, 1.0)
+    return doc.body_font_pt
 
 
 class _HtmlRenderer:
-    def __init__(self, doc: Document) -> None:
+    def __init__(self, doc: Document, block_ids: bool = False, highlight: int | None = None) -> None:
         self.doc = doc
+        self.block_ids = block_ids
+        self.highlight = highlight
+        self.index = 0                     # índice do bloco de doc.blocks em renderização
         self.emitted: set[str] = set()     # notas de rodapé já posicionadas
         self.ref_count: dict[str, int] = {}
         self.referenced = {s.note for b in doc.blocks for s in b.spans if s.note} | {
@@ -37,7 +54,13 @@ class _HtmlRenderer:
     def render(self) -> str:
         body: list[str] = []
         group: list[str] = []
-        for block in self.doc.blocks:
+        for self.index, block in enumerate(self.doc.blocks):
+            cols = self.doc.columns > 1 and not block.style.full_width
+            if block.style.hidden:
+                anchor = self._trailing_anchor(block)       # as notas sem chamada continuam
+                if anchor:
+                    (group if cols else body).append(anchor)
+                continue
             html = self._block(block)
             if block.style.page_break_before and (body or group):
                 # fora do div.cols (dentro dele seria quebra de coluna); antes do 1º bloco, nada
@@ -45,7 +68,13 @@ class _HtmlRenderer:
                     body.append(self._columns(group))
                     group = []
                 body.append('<div class="page-break"></div>')
-            if self.doc.columns > 1 and not block.style.full_width:
+            if block.style.space_before_lines > 0:
+                if group:
+                    body.append(self._columns(group))
+                    group = []
+                height = block.style.space_before_lines * self.doc.line_height * self.doc.body_font_pt
+                body.append(f'<div class="space" style="height:{height:g}pt"></div>')
+            if cols:
                 group.append(html)
                 continue
             if group:
@@ -69,6 +98,23 @@ class _HtmlRenderer:
         return f'<div class="cols" style="column-count:{self.doc.columns}">' + "\n".join(items) + "</div>"
 
     def _block(self, b: Block) -> str:
+        html = self._block_html(b)
+        return self._mark(html) if self.block_ids or self.highlight == self.index else html
+
+    def _mark(self, html: str) -> str:
+        """id="b{i}" e class="hl" no elemento principal (o filete, se houver, vem antes dele)."""
+        def tag(m: re.Match[str]) -> str:
+            t = m.group(0)
+            if self.block_ids:
+                t = t[:-1] + f' id="b{self.index}">'
+            if self.highlight == self.index:
+                t = re.sub(r'class="', 'class="hl ', t, 1) if 'class="' in t else t[:-1] + ' class="hl">'
+            return t
+
+        # o primeiro elemento que não é o div de filete
+        return re.sub(r'<(?!div class="rule )[a-z0-9]+[^>]*>', tag, html, count=1)
+
+    def _block_html(self, b: Block) -> str:
         style = self._style_attr(b)
         size = b.style.font_size_pt or self.doc.body_font_pt
         if b.kind in ("title", "heading"):
@@ -93,8 +139,11 @@ class _HtmlRenderer:
             inner = self._endnote(self.doc.notes[b.note]) if b.note in self.doc.notes else ""
         else:
             inner = f"<p{style}>{self._spans(b.spans, size)}</p>"
+        return self._ruled(b, inner) + self._trailing_anchor(b)
+
+    def _trailing_anchor(self, b: Block) -> str:
         trailing = self._trailing(b)
-        return self._ruled(b, inner) + (f'<div class="fn-anchor">{trailing}</div>' if trailing else "")
+        return f'<div class="fn-anchor">{trailing}</div>' if trailing else ""
 
     def _ruled(self, b: Block, html: str) -> str:
         """Filetes como elementos próprios antes/depois do bloco: a caixa do bloco não muda."""
@@ -128,6 +177,11 @@ class _HtmlRenderer:
             css.append(f"text-indent:{st.indent_em:g}em")
         if st.font_size_pt:
             css.append(f"font-size:{st.font_size_pt:g}pt")
+        if b.kind in _TEXT_KINDS:
+            if st.bold is not None:
+                css.append(f"font-weight:{'bold' if st.bold else 'normal'}")
+            if st.italic is not None:
+                css.append(f"font-style:{'italic' if st.italic else 'normal'}")
         return f' style="{";".join(css)}"' if css else ""
 
     def _trailing(self, b: Block) -> str:

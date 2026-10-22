@@ -46,6 +46,10 @@ class BlockStyle:
     rule_above: Rule | None = None    # filete colado acima do bloco
     rule_below: Rule | None = None    # filete colado abaixo do bloco
     page_break_before: bool = False   # força quebra de página antes do bloco (edição à mão)
+    hidden: bool = False              # não renderiza o bloco (as notas sem chamada dele ficam)
+    space_before_lines: int = 0       # linhas em branco antes do bloco
+    bold: bool | None = None          # None: o padrão do tipo de bloco
+    italic: bool | None = None
 
 
 @dataclass
@@ -97,6 +101,16 @@ class PageGeometry:
 
 
 @dataclass
+class OutputFormat:
+    """Formato de saída escolhido no editor (o original fica em `Document.page` etc.)."""
+
+    page_size: str = "original"       # original | A4 | Letter | ...
+    margin_cm: float = 2.5
+    font_size_pt: float | None = None
+    header: bool = True
+
+
+@dataclass
 class Document:
     source: str = ""
     page: PageGeometry = field(default_factory=PageGeometry)
@@ -113,6 +127,8 @@ class Document:
     page_numbers: bool = False
     blocks: list[Block] = field(default_factory=list)
     notes: dict[str, Note] = field(default_factory=dict)
+    output: OutputFormat | None = None
+    source_path: str = ""             # PDF de origem (preenchido à mão ou pelo editor)
     schema_version: int = SCHEMA_VERSION
 
     def save(self, path: Path) -> None:
@@ -147,6 +163,7 @@ def _document_from_dict(d: dict[str, Any]) -> Document:
     doc = _build(Document, d)
     doc.page = _build(PageGeometry, d.get("page", {}))
     doc.blocks = [_block_from_dict(b) for b in d.get("blocks", [])]
+    doc.output = _build(OutputFormat, d["output"]) if d.get("output") else None
     doc.notes = {}
     for nid, n in d.get("notes", {}).items():
         note = _build(Note, n)
