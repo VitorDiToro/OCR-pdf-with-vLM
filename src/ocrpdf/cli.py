@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import logging
 import signal
 import sys
@@ -17,9 +18,9 @@ from pathlib import Path
 import httpx
 
 from .italic.stage import MODEL_RULES, uses_model
-from .model import Document
+from .model import Document, OutputFormat
 from .ocr.vlm import PRESETS, VlmEngine
-from .output_format import apply_output_format, parse_page_size
+from .output_format import apply_format, parse_page_size
 from .pipeline import ItalicConfig, Pipeline
 from .render import render_pdf
 from .servers import ITALIC_HF_MODEL, ITALIC_SERVER_ENV, RestartSwitcher, SleepSwitcher, Switcher, default_script
@@ -108,19 +109,20 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _add_format_options(p: argparse.ArgumentParser) -> None:
-    """Formato de saída (só na renderização; o document.json guarda o formato original)."""
+    """Formato de saída; o `convert` o grava no document.json e o `render` usa o gravado, com a opção por cima."""
     p.add_argument("--page-size", type=_page_size_arg, default=None, metavar="TAMANHO",
                    help="original (padrão) | a4 | <largura>x<altura> em cm, ex.: 17,6x25")
-    p.add_argument("--margin", type=float, default=2.5,
-                   help="margens em cm, decimal com ponto (padrão 2.5); só vale quando --page-size não é original")
+    p.add_argument("--margin", type=float, default=None,
+                   help="margens em cm, decimal com ponto (padrão 2.5 ou o gravado); só vale quando --page-size não é original")
     p.add_argument("--font-size", type=_font_size_arg, default=None, metavar="PT",
                    help="tamanho do corpo em pt, decimal com ponto; títulos, notas e cabeçalho escalam junto (padrão: o medido)")
 
 
-def _page_size_arg(spec: str):
-    """parse_page_size para o argparse: só ArgumentTypeError mostra a mensagem em português."""
+def _page_size_arg(spec: str) -> str:
+    """Valida com parse_page_size e devolve o texto; só ArgumentTypeError mostra a mensagem em português."""
     try:
-        return parse_page_size(spec)
+        parse_page_size(spec)
+        return spec.strip()
     except ValueError as e:
         raise argparse.ArgumentTypeError(str(e)) from None
 
@@ -135,10 +137,24 @@ def _font_size_arg(spec: str) -> float:
     return value
 
 
+def _output_format(args, saved: OutputFormat | None) -> OutputFormat:
+    """Formato gravado (ou o padrão) com as opções passadas por cima."""
+    fmt = copy.copy(saved) if saved else OutputFormat()
+    if args.page_size is not None:
+        fmt.page_size = args.page_size
+    if args.margin is not None:
+        fmt.margin_cm = args.margin
+    if args.font_size is not None:
+        fmt.font_size_pt = args.font_size
+    if args.no_header:
+        fmt.header = False
+    return fmt
+
+
 def _formatted(args, doc: Document) -> Document | None:
-    """Aplica as opções de formato; em caso de valor inválido, avisa e devolve None."""
+    """Aplica o formato (gravado + opções); em caso de valor inválido, avisa e devolve None."""
     try:
-        return apply_output_format(doc, args.page_size, args.margin, args.font_size)
+        return apply_format(doc, _output_format(args, doc.output))
     except ValueError as e:
         print(f"ocrpdf: erro: {e}", file=sys.stderr)
         return None
@@ -210,8 +226,8 @@ def _convert(args) -> int:
         return 2
     work = _work_dir(args, output)
     doc = _run_analysis(args, work)
-    if args.no_header:
-        doc.running_header = ""
+    doc.output = _output_format(args, None)
+    doc.save(work / "document.json")
     if (doc := _formatted(args, doc)) is None:
         return 2
     render_pdf(doc, output, base_dir=work, html_out=work / "document.html")
@@ -228,8 +244,6 @@ def _analyze(args) -> int:
 
 def _render(args) -> int:
     doc = Document.load(args.document)
-    if args.no_header:
-        doc.running_header = ""
     if (doc := _formatted(args, doc)) is None:
         return 2
     render_pdf(doc, args.output, base_dir=args.document.parent, html_out=args.document.with_suffix(".html"))

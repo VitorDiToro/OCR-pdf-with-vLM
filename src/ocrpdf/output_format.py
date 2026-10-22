@@ -8,7 +8,7 @@ from __future__ import annotations
 import copy
 import re
 
-from .model import Block, Document, PageGeometry
+from .model import Block, Document, OutputFormat, PageGeometry
 
 _PT_PER_CM = 72 / 2.54
 _A4_PT = (595.28, 841.89)
@@ -49,6 +49,14 @@ def apply_output_format(doc: Document, page_size: tuple[float, float] | None, ma
         if font_size_pt <= 0:
             raise ValueError("o tamanho da fonte deve ser positivo")
         _scale_fonts(out, font_size_pt / doc.body_font_pt)
+    return out
+
+
+def apply_format(doc: Document, fmt: OutputFormat) -> Document:
+    """Como `apply_output_format`, a partir do formato gravado; `header=False` tira o cabeçalho corrente."""
+    out = apply_output_format(doc, parse_page_size(fmt.page_size), fmt.margin_cm, fmt.font_size_pt)
+    if not fmt.header:
+        out.running_header = ""
     return out
 
 
