@@ -45,6 +45,7 @@ class BlockStyle:
     full_width: bool = True           # False: bloco pertence a uma coluna
     rule_above: Rule | None = None    # filete colado acima do bloco
     rule_below: Rule | None = None    # filete colado abaixo do bloco
+    page_break_before: bool = False   # força quebra de página antes do bloco (edição à mão)
 
 
 @dataclass

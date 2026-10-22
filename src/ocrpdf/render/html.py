@@ -39,6 +39,12 @@ class _HtmlRenderer:
         group: list[str] = []
         for block in self.doc.blocks:
             html = self._block(block)
+            if block.style.page_break_before and (body or group):
+                # fora do div.cols (dentro dele seria quebra de coluna); antes do 1º bloco, nada
+                if group:
+                    body.append(self._columns(group))
+                    group = []
+                body.append('<div class="page-break"></div>')
             if self.doc.columns > 1 and not block.style.full_width:
                 group.append(html)
                 continue

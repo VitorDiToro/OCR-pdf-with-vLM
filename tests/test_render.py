@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -98,3 +99,45 @@ def test_without_patch_weasyprint_defers_notes(tmp_path: Path, monkeypatch: pyte
     out = tmp_path / "out.pdf"
     render.render_pdf(_orphans_doc(), out, base_dir=tmp_path)
     assert _misplaced(out) != []
+
+
+def _two_parts(columns: int, break_at: int | None) -> Document:
+    blocks = [Block(kind="heading", level=2, spans=[Span("Primeira parte")]),
+              Block(kind="paragraph", spans=[Span("Texto curto da primeira parte.")]),
+              Block(kind="heading", level=2, spans=[Span("Segunda parte")]),
+              Block(kind="paragraph", spans=[Span("Texto curto da segunda parte.")])]
+    for b in blocks:
+        b.style.full_width = columns == 1
+    if break_at is not None:
+        blocks[break_at].style.page_break_before = True
+    return Document(page=PageGeometry(300, 400, 30, 30, 30, 30), body_font_pt=10, line_height=1.2,
+                    columns=columns, blocks=blocks)
+
+
+@pytest.mark.parametrize("columns", [1, 2])
+def test_page_break_before_starts_the_block_on_a_new_page(tmp_path: Path, columns: int) -> None:
+    # edição manual no document.json: "page_break_before": true no style do bloco
+    out = tmp_path / "out.pdf"
+    render.render_pdf(_two_parts(columns, None), out, base_dir=tmp_path)
+    assert len(PdfReader(out).pages) == 1                      # controle: cabe tudo numa página
+    render.render_pdf(_two_parts(columns, 2), out, base_dir=tmp_path)
+    first, second = (p.extract_text() for p in PdfReader(out).pages)
+    assert "Primeira parte" in first and "Segunda" not in first
+    assert second.lstrip().startswith("Segunda parte")
+
+
+def test_page_break_before_the_first_block_adds_no_blank_page(tmp_path: Path) -> None:
+    out = tmp_path / "out.pdf"
+    render.render_pdf(_two_parts(1, 0), out, base_dir=tmp_path)
+    assert len(PdfReader(out).pages) == 1
+
+
+def test_page_break_before_survives_save_and_old_files_load_without_it(tmp_path: Path) -> None:
+    path = tmp_path / "document.json"
+    _two_parts(1, 2).save(path)
+    assert [b.style.page_break_before for b in Document.load(path).blocks] == [False, False, True, False]
+    data = json.loads(path.read_text())
+    for b in data["blocks"]:
+        del b["style"]["page_break_before"]                   # document.json de antes do campo
+    path.write_text(json.dumps(data))
+    assert not any(b.style.page_break_before for b in Document.load(path).blocks)

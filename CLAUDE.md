@@ -55,6 +55,12 @@ Formato de saída (`convert` e `render`; só na renderização, o `document.json
 diferente de `original`), `--font-size PT` (escala corpo, títulos, notas e cabeçalho). Em `--margin`
 e `--font-size` o decimal é com **ponto** (decisão do usuário; está na ajuda).
 
+Edição à mão do `document.json` (depois, só `ocrpdf render`; `convert`/`analyze` remontam o JSON a
+partir do cache e apagam as edições): por bloco, `style.align` (justify|left|center|right),
+`style.indent_em`, `style.font_size_pt`, `style.page_break_before: true` (quebra de página antes do
+bloco); por trecho (`spans`), `text`, `italic`, `bold`. A família da fonte é só do documento
+(`font_family`). `source.page` é 0-based.
+
 Pasta de trabalho (padrão `<saída>_work/`): `pages/page_NNNN.json` (por página: OCR em cache +
 medidas da probe regravadas a cada execução), `assets/` (recortes de figuras), `meta.json` (fonte
 detectada), `italic/page_NNNN.json` (marcas do 2º modelo, só r1/r2), `document.json`, `document.html`.
@@ -108,7 +114,9 @@ scripts/          serve_vllm.sh (um servidor; GPU_MEM pela VRAM livre; MAX_IMAGE
   `endnote` é um marcador de posição (`note=id`); o conteúdo fica em `doc.notes`.
   `trailing_notes`: notas de rodapé sem chamada, ancoradas no último bloco da página de origem.
 - `BlockStyle`: align, indent_em, font_size_pt, full_width, rule_above/rule_below (`Rule`:
-  thickness_pt, gap_pt, left_em no em do corpo, right_frac relativo à área de texto).
+  thickness_pt, gap_pt, left_em no em do corpo, right_frac relativo à área de texto),
+  page_break_before (só edição à mão; o render põe um `div.page-break` fora do `div.cols`, e
+  nada antes do 1º bloco).
 - `Span`: text + italic/bold/sup/sub/math + `note` (id quando é chamada de nota).
 - `Note`: id ("n1"...), label ("1", "*", "a"...), kind footnote|endnote, page, blocks.
 
