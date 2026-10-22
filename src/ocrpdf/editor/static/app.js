@@ -354,6 +354,8 @@ function updateStatus() {
     el.textContent = 'salvo';
     el.className = 'status saved';
   }
+  // aviso do conflito: recarregar descarta também o que está só na memória da sessão
+  ui.conflictMemory.hidden = !S.sessionDirty;
 }
 
 function showMessage(text, kind) {
@@ -599,24 +601,38 @@ function renderBlockBar() {
   }
 }
 
+let applyingSize = false;   // a troca de foco no meio da aplicação dispara outro change
+
+/** Aplica o campo Tamanho ao bloco; false se o valor é inválido (a mensagem fica na faixa). */
 function applySize() {
   const n = S.sizeFor;
   const scale = currentScale();
   const data = S.info.data;
-  if (n < 0 || !data || n >= data.length || !scale) return;
+  if (applyingSize || n < 0 || !data || n >= data.length || !scale) return true;
   const v = parseNum(ui.bSize.value);
   if (v !== null && !(Number.isFinite(v) && v > 0)) {
     showMessage('tamanho inválido: um número positivo em pt (vazio volta ao padrão)', 'error');
-    return;
+    return false;
   }
   const measured = v === null ? null : round1(v / scale);
   if (measured !== null && measured <= 0) {
     showMessage('tamanho pequeno demais', 'error');
-    return;
+    return false;
   }
   const own = styleOf(data[n]).font_size_pt;
-  if ((typeof own === 'number' ? own : null) === measured) return;   // nada mudou
-  blockAction('size', measured, n);
+  if ((typeof own === 'number' ? own : null) === measured) return true;   // nada mudou
+  applyingSize = true;
+  try {
+    blockAction('size', measured, n);
+  } finally {
+    applyingSize = false;
+  }
+  return true;
+}
+
+/** Ctrl+S / Ctrl+Enter com o campo Tamanho em edição: o change só vem com Enter ou ao sair do campo. */
+function applyPendingSize() {
+  return document.activeElement !== ui.bSize || ui.bSize.value === S.sizeShown || applySize();
 }
 
 // --- aba Original --------------------------------------------------------------------------
@@ -825,6 +841,7 @@ async function justifyAll() {
     if (textDirty()) {   // leva antes as edições da tela para a sessão, para não perdê-las
       await api('POST', `/api/page?n=${S.page}`, { text });
       pushed = true;
+      S.sessionTouched = true;   // "Descartar" desfaz o envio mesmo se o justify-all falhar
     }
     const r = await api('POST', '/api/justify-all', {});
     if (r.changed || pushed) S.sessionDirty = true;
@@ -841,6 +858,9 @@ async function justifyAll() {
  */
 async function reloadFromDisk() {
   await run('recarregando…', async () => {
+    const memory = S.sessionDirty;   // o setState abaixo o zera
+    const lost = memory
+      ? ' As alterações em memória de outras páginas e do "Justificar todos" foram descartadas.' : '';
     const st = await api('POST', '/api/reload', {});
     ui.conflict.hidden = true;
     clearResults();   // as imagens da renderização anterior foram descartadas no servidor
@@ -851,13 +871,13 @@ async function reloadFromDisk() {
     if (i >= 0) {
       await loadPage(i, true, null);   // sentText null: o texto da tela nunca é trocado
       ui.pageSel.value = String(i);
-      showMessage(textDirty() || formatDirty()
+      showMessage((textDirty() || formatDirty()
         ? 'Recarregado do disco. O texto desta página continua na tela, não salvo: Salvar o grava sobre o conteúdo novo.'
-        : 'Recarregado do disco; esta página não tinha alterações.', 'ok');
+        : 'Recarregado do disco; esta página não tinha alterações.') + lost, 'ok');
     } else {
       const next = S.pages.findIndex((p) => p > gone);
       await loadPage(next >= 0 ? next : S.pages.length - 1);
-      showMessage(`Recarregado do disco, mas a página ${gone + 1} não existe mais nele: o texto dela foi descartado.`, 'error');
+      showMessage(`Recarregado do disco, mas a página ${gone + 1} não existe mais nele: o texto dela foi descartado.${lost}`, 'error');
     }
   });
 }
@@ -944,6 +964,7 @@ function bind() {
     resultInfo: $('result-info'), resultPages: $('result-pages'),
     origInfo: $('orig-info'), origWrap: $('orig-wrap'), origImg: $('orig-img'), origBoxes: $('orig-boxes'),
     leave: $('leave'), leaveText: $('leave-text'), conflict: $('conflict'), reload: $('reload'),
+    conflictMemory: $('conflict-memory'),
     leaveSave: $('leave-save'), leaveDiscard: $('leave-discard'), leaveStay: $('leave-stay'),
   });
 
@@ -1022,10 +1043,10 @@ function bind() {
     const mod = e.ctrlKey || e.metaKey;
     if (mod && (e.key === 's' || e.key === 'S')) {
       e.preventDefault();
-      if (!S.busy && S.page !== null) save();
+      if (!S.busy && S.page !== null && applyPendingSize()) save();
     } else if (mod && e.key === 'Enter') {
       e.preventDefault();
-      if (!S.busy && S.page !== null) renderPage();
+      if (!S.busy && S.page !== null && applyPendingSize()) renderPage();
     }
   });
 
