@@ -58,7 +58,7 @@ def test_page_post_and_justify(api):
     assert c.post("/api/page?n=0", json={"text": "[1 2"}).status_code == 400
     ok = c.post("/api/page?n=0", json={"text": s.page_text(0)})
     assert ok.json() == {"ok": True}
-    assert isinstance(c.post("/api/justify-all").json()["changed"], int)
+    assert isinstance(c.post("/api/justify-all", json={}).json()["changed"], int)
 
 
 def test_save_flow(api, tmp_path):
@@ -179,3 +179,28 @@ def test_serve_starts_and_stops(tmp_path, monkeypatch):
     made[0].shutdown()
     t.join(10)
     assert not t.is_alive()
+
+
+def test_unexpected_error_is_500_json_and_lock_released(api, monkeypatch):
+    s, c = api()
+    real = rendering.render_full
+    monkeypatch.setattr(rendering, "render_full", lambda *a, **k: (_ for _ in ()).throw(OSError("disco cheio")))
+    body = {"page": 1, "text": s.page_text(1), "format": s.format().__dict__}
+    r = c.post("/api/render/all", json=body)
+    assert r.status_code == 500 and "disco cheio" in r.json()["error"]
+    monkeypatch.setattr(rendering, "render_full", real)
+    assert c.post("/api/render/all", json=body).status_code == 200
+
+
+def test_post_requires_json_content_type(api, tmp_path):
+    s, c = api()
+    path = tmp_path / "document.json"
+    before = path.read_bytes()
+    fmt = {"page_size": "a4", "margin_cm": 2.0, "font_size_pt": None, "header": True}
+    body = json.dumps({"page": 1, "text": s.page_text(1), "format": fmt})
+    r = c.post("/api/save", content=body, headers={"Content-Type": "text/plain"})
+    assert r.status_code == 415 and "application/json" in r.json()["error"]
+    assert path.read_bytes() == before
+    assert c.post("/api/justify-all", content=b"", headers={"Content-Type": "text/plain"}).status_code == 415
+    r = c.post("/api/save", content=body, headers={"Content-Type": "application/json; charset=utf-8"})
+    assert r.status_code == 200 and path.read_bytes() != before

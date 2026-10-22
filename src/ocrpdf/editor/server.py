@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import mimetypes
 import threading
 import webbrowser
@@ -16,6 +17,7 @@ from . import rendering
 from .session import ConflictError, EditError, EditSession
 
 _STATIC = Path(__file__).with_name("static")
+_log = logging.getLogger(__name__)
 _BUSY = "renderização em andamento; aguarde terminar"
 
 
@@ -35,6 +37,9 @@ class _App:
         self.base_dir = session.path.parent
         self.render_lock = threading.Lock()   # uma renderização por vez
         self.state_lock = threading.RLock()   # protege a sessão
+        # pypdfium2 não é thread-safe: toda chamada que rasteriza PDF (original_image, pdf_page_images,
+        # render_page_images) passa por este lock. Ordem de aquisição: state_lock -> pdf_lock.
+        self.pdf_lock = threading.Lock()
         self.images: dict[str, list[bytes]] = {}
         self._counter = 0
         self._sizes: dict[int, tuple[float, float]] = {}
@@ -51,7 +56,8 @@ class _App:
             return None
         if page not in self._sizes:
             try:
-                _, w, h = rendering.original_image(self.pdf, page)
+                with self.pdf_lock:
+                    _, w, h = rendering.original_image(self.pdf, page)
             except Exception:   # página fora do PDF ou PDF ilegível: sem caixa
                 return None
             self._sizes[page] = (w, h)
@@ -114,8 +120,9 @@ class _App:
             highlight = body.get("highlight")
             if highlight is not None and not isinstance(highlight, int):
                 raise _HttpError(400, "'highlight' deve ser o índice de um bloco")
-            images = rendering.render_page_images(
-                s.doc, s.page_indices(page), s.format(), self.base_dir, highlight=highlight)
+            with self.pdf_lock:
+                images = rendering.render_page_images(
+                    s.doc, s.page_indices(page), s.format(), self.base_dir, highlight=highlight)
         return {"images": self.keep_images(images)}
 
     def render_all(self, body: dict) -> dict:
@@ -124,7 +131,8 @@ class _App:
             page = self.save(body)
             mapping = rendering.render_full(s.doc, s.format(), self.output, self.base_dir)
             wanted = sorted({mapping[i] for i in s.page_indices(page) if i in mapping})
-        images = rendering.pdf_page_images(self.output, wanted) if wanted else []
+        with self.pdf_lock:
+            images = rendering.pdf_page_images(self.output, wanted) if wanted else []
         return {"pdf": str(self.output), "pages": wanted, "images": self.keep_images(images)}
 
 
@@ -169,6 +177,10 @@ def _handler(app: _App) -> type[BaseHTTPRequestHandler]:
             url = urlparse(self.path)
             query = {k: v[0] for k, v in parse_qs(url.query).items()}
             try:
+                if self.command == "POST" and not self._is_json():
+                    # exigir application/json força um preflight CORS (que não respondemos): páginas de
+                    # outras origens não conseguem gravar nem renderizar por aqui
+                    raise _HttpError(415, "Content-Type deve ser application/json")
                 for pattern, fn in routes:
                     if pattern(url.path):
                         return fn(url.path, query)
@@ -179,6 +191,13 @@ def _handler(app: _App) -> type[BaseHTTPRequestHandler]:
                 self._json({"error": str(e)}, 409)
             except (EditError, ValueError) as e:
                 self._json({"error": str(e)}, 400)
+            except Exception as e:   # falha inesperada (WeasyPrint, disco, pdfium): resposta JSON, não conexão caída
+                _log.exception("erro interno em %s %s", self.command, self.path)
+                self._json({"error": f"erro interno: {e}"}, 500)
+
+        def _is_json(self) -> bool:
+            ctype = self.headers.get("Content-Type") or ""
+            return ctype.split(";")[0].strip().lower() == "application/json"
 
         def _body(self) -> dict:
             try:
@@ -232,7 +251,8 @@ def _handler(app: _App) -> type[BaseHTTPRequestHandler]:
                 raise _HttpError(404, "sem PDF original")
             try:
                 page = int(path[len("/original/"):].removesuffix(".png"))
-                png = rendering.original_image(app.pdf, page)[0]
+                with app.pdf_lock:
+                    png = rendering.original_image(app.pdf, page)[0]
             except Exception:
                 raise _HttpError(404, "página do original não encontrada") from None
             self._send(200, png, "image/png")
