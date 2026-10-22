@@ -84,3 +84,15 @@ def test_heading_of_body_size_keeps_paragraph_indent_in_pdf(tmp_path):
     render_pdf(doc, out, base_dir=tmp_path)
     xs = {text.split()[0]: x for text, x, _ in _text_positions(out)}
     assert xs["Seção"] == pytest.approx(xs["Um"], abs=1.0)
+
+
+def test_impossible_font_of_a_cover_logo_falls_back_to_what_fits_the_bbox():
+    # capa do Althusser: a haste do "C" decorativo atravessa as duas linhas de "Ler / O CAPITAL" e a
+    # probe mede uma "linha" de 752 px (fonte de 376 pt); nessa fonte o texto não caberia no bbox
+    logo = Region("title", (73, 84, 1008, 941), "Ler\nO CAPITAL",
+                  LineMetrics(lines=1, line_pitch_px=0.0, ascent_px=752.0, first_indent_px=0.0, align="left"))
+    regular = title([251, 157, 1395, 209])      # título do Benjamin: 34 px de ascent ≈ 17 pt
+    doc = assemble([page(logo, regular, para(), para(), para())])
+    logo_pt, regular_pt = (b.style.font_size_pt for b in doc.blocks if b.kind == "title")
+    assert logo_pt == pytest.approx(935 / (0.5 * len("CAPITAL")) * 612 / 1700, abs=0.5)   # a palavra mais longa cabe
+    assert regular_pt == pytest.approx(34 / 0.72 * 612 / 1700, abs=0.5)                      # medida plausível: fica

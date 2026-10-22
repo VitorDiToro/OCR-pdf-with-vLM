@@ -17,6 +17,9 @@ from .ocr.base import PageLayout, Region
 log = logging.getLogger(__name__)
 
 _ASCENT_PER_EM = 0.72  # altura das maiúsculas/ascendentes por em (Arial 0,72; Times 0,68)
+_CHAR_EM = 0.5         # largura média de um caractere, em em (texto corrido: 0,5–0,6)
+_IMPLAUSIBLE = 1.8     # fonte medida acima disso × a que cabe no bbox é medida errada; nos 8
+                       # documentos reais: capas e carimbos ≥ 2,0; texto ≤ 1,76 (nota com rótulo sobrescrito)
 _TERMINAL = re.compile(r"[.!?:;…\"”»)\]]\s*$")
 _PAGE_NUMBER = re.compile(r"^\s*(?:p[áa]g(?:ina)?\.?\s*)?(\d{1,4}|[ivxlcdm]{1,7})\s*$", re.I)
 _EDGE_NUMBER = re.compile(r"^\s*\d{1,4}\s+|\s+\d{1,4}\s*$")
@@ -91,7 +94,23 @@ def _font_px(r: Region) -> float | None:
     m = r.metrics
     if not m or m.ascent_px <= 0:
         return None
-    return m.ascent_px / _ASCENT_PER_EM
+    measured = m.ascent_px / _ASCENT_PER_EM
+    # Logotipo de capa (a haste de um "C" decorativo atravessando as linhas), carimbo: a tinta vira
+    # uma "linha" alta demais e a fonte medida chega a centenas de pt. Se nela o texto não caberia
+    # no bbox (com folga: _IMPLAUSIBLE), vale a fonte em que ele cabe.
+    fits = _fitting_font_px(r)
+    return fits if fits and measured > _IMPLAUSIBLE * fits else measured
+
+
+def _fitting_font_px(r: Region) -> float | None:
+    """Maior fonte (px) em que o texto do bloco cabe no bbox, a _CHAR_EM por caractere: a palavra mais
+    longa na largura, e o texto todo na área (linhas de 1 em)."""
+    text = " ".join("".join(s.text for s in inline.parse_flat(r.text)).split())
+    if not text:
+        return None
+    w, h = r.bbox[2] - r.bbox[0], r.bbox[3] - r.bbox[1]
+    longest = max(len(word) for word in text.split())
+    return min(w / (_CHAR_EM * longest), (w * h / (_CHAR_EM * len(text))) ** 0.5)
 
 
 def _measure_typography(doc: Document, pages: list[PageLayout]) -> None:
