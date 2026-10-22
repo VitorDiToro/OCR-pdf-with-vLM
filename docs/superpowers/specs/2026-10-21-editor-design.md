@@ -35,7 +35,7 @@ Não-objetivos (v1):
 - Uso por mais de uma pessoa ou pela rede.
 
 Anti-objetivos (falha mesmo que "funcione"):
-- Corromper ou perder o `document.json`, ou perder edições.
+- Corromper o `document.json`, ou perder edições dentro do editor (salvar, trocar de página, renderizar).
 - O PDF de "Renderizar tudo" diferente do que `ocrpdf render` daria com o mesmo `document.json`.
 - Depender de internet, de biblioteca gráfica nova ou de dependência Python nova.
 - `document.json` antigos deixarem de carregar.
@@ -81,11 +81,10 @@ Esboços aprovados: `.superpowers/brainstorm/1889215-1792632357/content/layout-c
 - **Comando**: `ocrpdf edit <work>/document.json -o <final>.pdf [--pdf original.pdf]`.
   - `-o` obrigatório, como no `render`.
   - Original: `--pdf`; sem ele, `doc.source_path` (caminho absoluto do escaneado, campo novo
-    gravado pelo `analyze`/`convert`); sem ele (documentos antigos), procura o arquivo de nome
-    `doc.source` na pasta-pai, avó e bisavó do `document.json`, **pulando o arquivo de `-o` e PDFs
-    gerados pelo WeasyPrint** (metadado Producer). Em `docs_ocr`, a avó tem o PDF reconstruído de
-    mesmo nome e o escaneado está na bisavó. Não achou: a aba Original mostra o aviso e o resto
-    funciona.
+    gravado pelo `analyze`/`convert`). Sem nenhum dos dois, a aba Original mostra um aviso e o resto
+    funciona. Sem busca em pastas (decisão do usuário): nos 7 documentos de `docs_ocr`, que são
+    anteriores ao campo, o `source_path` é preenchido à mão depois da implementação (os originais
+    estão em `docs_ocr/<nome>.pdf`).
   - O formato vem do `document.json` (ou os padrões de hoje: `original`, 2,5 cm, corpo medido,
     cabeçalho ligado).
 - **O que o JSON da esquerda contém**: um array com os blocos daquela página, na ordem do
@@ -137,7 +136,6 @@ Esboços aprovados: `.superpowers/brainstorm/1889215-1792632357/content/layout-c
   - `BlockStyle.bold: bool | None = None`, `BlockStyle.italic: bool | None = None` — sobrescritos do
     bloco inteiro (o render aplica `font-weight`/`font-style` no elemento do bloco).
   - `Document.source_path: str = ""` — caminho absoluto do escaneado, gravado pelo `analyze`.
-  - `Document.edited: bool = False` — o editor liga ao salvar.
   - `Document.output: OutputFormat | None = None`, com `page_size: str = "original"`,
     `margin_cm: float = 2.5`, `font_size_pt: float | None = None`, `header: bool = True`.
 - **Render**: pula blocos ocultos. Notas chamadas só por blocos ocultos somem com eles;
@@ -145,12 +143,11 @@ Esboços aprovados: `.superpowers/brainstorm/1889215-1792632357/content/layout-c
 - **CLI**: `render` monta o formato a partir de `doc.output` e sobrepõe as opções passadas (não grava
   nada); `convert` grava em `doc.output` as opções de formato que recebeu. `--no-header` passa a ser
   `header = False`.
-- **Edições protegidas de um novo `analyze`/`convert`**: o `analyze` remonta e sobrescreve o
-  `document.json` mesmo com o OCR em cache. Se o `document.json` existente tem `edited = true`, ele
-  **para com erro** explicando; com `--reassemble`, guarda o existente como
-  `document.edited-<data-hora>.json` e segue. Sem mesclagem de edições (fora da v1).
-- Depois de implementado: gravar no `document.json` do Marx o formato usado nele (`14.4x21.6`,
-  margem 2, corpo 12.4).
+- **Sem proteção contra um novo `analyze`/`convert`** (decisão do usuário): eles continuam remontando
+  e sobrescrevendo o `document.json`, e as edições se perdem; o aviso segue no `CLAUDE.md`.
+- Depois de implementado: nos 7 `document.json` de `docs_ocr`, preencher `source_path` com o
+  original (`docs_ocr/<nome>.pdf`); no do Marx, gravar também o formato usado (`14.4x21.6`, margem 2,
+  corpo 12.4).
 - **Testes** (pytest, sem navegador): API do servidor (carregar página, salvar com validação,
   recusa de mudança estrutural, backup, conflito de mtime, renderizar página e tudo), render de
   `hidden`/`space_before_lines`, `output` (gravar/carregar, precedência no `render`, `convert`
