@@ -46,7 +46,7 @@ uv run python scripts/eval_italic.py --pdf in.pdf --work work --gold gabarito.js
 
 Opções relevantes: `--preset dots|qwen25vl|qwen3vl`, `--server`, `--model`, `--dpi 200`,
 `--pages "1-3,7"`, `--workers 4`, `--font auto|serif|sans|mono|<família>`, `--lang pt-BR`,
-`--force` (ignora cache), `--no-header`.
+`--force` (ignora cache), `--header/--no-header` (padrão: o gravado; sem ele, ligado).
 Itálico (etapa 2): `--italic-rule slant` (padrão, só o servidor do OCR) | `r1`/`r2` (2º modelo,
 servidor em :8001: `scripts/serve_pair.sh`, ou `--switch restart` para a app subir/derrubar cada
 servidor; `--italic-server`, `--italic-model`, `--italic-hf-model`); `--no-italic` = itálico do OCR
@@ -57,18 +57,22 @@ opções passadas valem por cima (não gravam nada); o resto do `document.json` 
 `--page-size original|a4|<L>x<A>` (cm, aceita vírgula), `--margin 2.5` (cm; só com tamanho
 diferente de `original`), `--font-size PT` (escala corpo, títulos, notas e cabeçalho). Em `--margin`
 e `--font-size` o decimal é com **ponto** (decisão do usuário; está na ajuda).
+`apply_format` valida o formato (`validate_output_format`: margem ≥ 0, corpo até 1000 pt, header
+booleano); `output` gravado inválido sai como `ocrpdf: erro: …`. `convert`, `render` e `edit` recusam
+`-o` igual ao PDF escaneado (entrada, `source_path` ou `--pdf`).
 
 Edição do `document.json`: `ocrpdf edit <work>/document.json -o final.pdf [--pdf original.pdf]
 [--port N] [--no-browser]` abre um editor local no navegador (só 127.0.0.1, sem CDN). Navega pela
 página do original (`source.page`); à esquerda, o JSON compacto dos blocos da página (só texto,
 marcas ligadas e `style` fora do padrão; mesmo número e `kind` de blocos ao salvar, remover =
 ocultar); à direita, abas Resultado e Original (escaneado, blocos numerados). Botões: Salvar
-(atômico; cria `document.orig.json` uma vez; se o arquivo mudou no disco, recusa com 409 e a página
-oferece **Recarregar do disco**: `POST /api/reload` relê o arquivo e descarta a memória; o texto e o
-formato da tela ficam, não salvos, e o próximo Salvar os grava sobre o conteúdo novo), Renderizar
-esta página (aproximado na paginação; fora da 1ª página do documento, com cabeçalho mesmo se
-`header_on_first_page` é falso), Renderizar tudo (salva antes; igual ao `ocrpdf render`; mostra as
-páginas finais do 1º bloco da página até onde começa o bloco visível seguinte), Justificar todos os
+(atômico; cria `<nome>.orig.json` uma vez; se o arquivo mudou no disco ou sumiu, recusa com 409 e a
+página oferece **Recarregar do disco**: `POST /api/reload` relê o arquivo e descarta a memória, e a
+faixa avisa antes quando há alterações só em memória; o texto e o formato da tela ficam, não salvos,
+e o próximo Salvar os grava sobre o conteúdo novo), Renderizar esta página (aproximado na paginação;
+fora da 1ª página do documento, com cabeçalho mesmo se `header_on_first_page` é falso), Renderizar
+tudo (salva antes; igual ao `ocrpdf render`, inclusive o `document.html`; mostra as páginas finais do
+1º bloco da página até onde começa o bloco visível seguinte), Justificar todos os
 parágrafos, e por bloco negrito/itálico (estado efetivo: sobrescrito, ou título/todos os trechos
 marcados), justificar, quebra de página, + linha em branco, ocultar, tamanho (pt na escala da saída).
 A faixa de formato edita `document.output`. O original vem de `--pdf` ou de `doc.source_path`
@@ -142,9 +146,10 @@ scripts/          serve_vllm.sh (um servidor; GPU_MEM pela VRAM livre; MAX_IMAGE
   `trailing_notes`: notas de rodapé sem chamada, ancoradas no último bloco da página de origem.
 - `BlockStyle`: align, indent_em, font_size_pt, full_width, rule_above/rule_below (`Rule`:
   thickness_pt, gap_pt, left_em no em do corpo, right_frac relativo à área de texto),
-  hidden (o render pula o bloco), space_before_lines (linhas do corpo antes do bloco), bold/italic
+  hidden (o render pula o bloco; a quebra de página dele passa para o próximo bloco visível),
+  space_before_lines (linhas do corpo antes do bloco; num bloco de coluna, dentro do `div.cols`), bold/italic
   (`bool | None`, sobrescrevem o bloco inteiro), page_break_before (o render põe um `div.page-break` fora do `div.cols`, e
-  nada antes do 1º bloco).
+  nada antes do 1º bloco visível).
 - `Span`: text + italic/bold/sup/sub/math + `note` (id quando é chamada de nota).
 - `Note`: id ("n1"...), label ("1", "*", "a"...), kind footnote|endnote, page, blocks.
 
