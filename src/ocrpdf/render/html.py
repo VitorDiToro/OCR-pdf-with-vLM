@@ -73,12 +73,13 @@ class _HtmlRenderer:
                 body.append('<div class="page-break"></div>')
             page_break, shown = False, True
             if block.style.space_before_lines > 0:
-                # bloco de coluna: o espaço fica dentro do div.cols (fechá-lo rebalancearia as colunas)
+                # bloco de coluna no meio do grupo: o espaço fica dentro do div.cols (fechá-lo rebalancearia
+                # as colunas); no início do grupo, fora dele (dentro, empurraria só a 1ª coluna)
                 if group and not cols:
                     body.append(self._columns(group))
                     group = []
                 height = block.style.space_before_lines * self.doc.line_height * self.doc.body_font_pt
-                (group if cols else body).append(f'<div class="space" style="height:{height:g}pt"></div>')
+                (group if cols and group else body).append(f'<div class="space" style="height:{height:g}pt"></div>')
             if cols:
                 group.append(html)
                 continue

@@ -447,3 +447,45 @@ def test_render_all_writes_the_html_like_cli_render(api, tmp_path):
     html.unlink()
     assert cli.main(["render", str(tmp_path / "document.json"), "-o", str(tmp_path / "cli.pdf")]) == 0
     assert html.read_text(encoding="utf-8") == editor_html
+
+
+def test_serve_refuses_output_equal_to_source_path_even_with_another_pdf(tmp_path, monkeypatch, capsys):
+    def no_server(*a, **k):
+        raise AssertionError("não devia abrir o servidor")
+
+    monkeypatch.setattr(server, "make_server", no_server)
+    scanned, copy = tmp_path / "in.pdf", tmp_path / "copia.pdf"
+    scanned.write_bytes(b"%PDF-1.4 original")
+    copy.write_bytes(b"%PDF-1.4 copia")
+    sess = _doc(tmp_path, source_path=str(scanned))
+    for pdf in (copy, tmp_path / "inexistente.pdf"):
+        assert cli.main(["edit", str(sess.path), "-o", str(scanned), "--pdf", str(pdf), "--no-browser"]) == 1
+        assert "PDF escaneado" in capsys.readouterr().err
+    assert scanned.read_bytes() == b"%PDF-1.4 original"
+
+
+def test_box_does_not_rasterize_the_original(api, tmp_path, monkeypatch):
+    img, _ = benjamin_like_page()
+    pdf = make_pdf(tmp_path / "s.pdf", [img, img], dpi=200)
+
+    def no_raster(*a, **k):
+        raise AssertionError("rasterizou a página só para ler o tamanho")
+
+    monkeypatch.setattr(rendering, "original_image", no_raster)
+    s, c = api(pdf=pdf)
+    box = c.get("/api/page", params={"n": 0}).json()["blocks"][0]["box"]
+    assert box is not None and len(box) == 4    # original_size engole a exceção: sem caixa, falharia aqui
+
+
+def test_invalid_saved_format_is_a_clear_error_on_open_and_reload(api, tmp_path, capsys):
+    s, c = api()
+    path = tmp_path / "document.json"
+    data = json.loads(path.read_text())
+    data["output"] = {"page_size": "a4", "margin_cm": 2, "font_size_pt": "12", "header": True}
+    path.write_text(json.dumps(data))
+    r = c.post("/api/reload", json={})
+    assert r.status_code == 400 and "formato gravado (output) inválido" in r.json()["error"]
+    assert c.get("/api/page", params={"n": 0}).status_code == 200    # a sessão anterior continua
+    assert cli.main(["edit", str(path), "-o", str(tmp_path / "x.pdf"), "--no-browser"]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("ocrpdf: erro:") and "formato gravado (output) inválido" in err and '"12"' in err

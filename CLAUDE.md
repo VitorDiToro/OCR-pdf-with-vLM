@@ -77,7 +77,7 @@ parágrafos, e por bloco negrito/itálico (estado efetivo: sobrescrito, ou títu
 marcados), justificar, quebra de página, + linha em branco, ocultar, tamanho (pt na escala da saída).
 A faixa de formato edita `document.output`. O original vem de `--pdf` ou de `doc.source_path`
 (gravado pelo `analyze`/`convert`; sem ele a aba Original avisa). Erros de início (documento
-inexistente ou inválido, porta ocupada) saem como `ocrpdf: erro: …`, código 1.
+inexistente ou inválido, inclusive o `output` gravado, porta ocupada) saem como `ocrpdf: erro: …`, código 1.
 `convert`/`analyze` remontam o JSON a partir do cache e apagam as edições (sem proteção, decisão do
 usuário). Campos editáveis à mão: por bloco, `style.align` (justify|left|center|right),
 `style.indent_em`, `style.font_size_pt` (escala medida), `style.page_break_before`,

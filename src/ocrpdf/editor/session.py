@@ -8,7 +8,7 @@ from pathlib import Path
 
 from ocrpdf.editor.compact import from_compact, to_compact
 from ocrpdf.model import Document, OutputFormat
-from ocrpdf.output_format import apply_format
+from ocrpdf.output_format import apply_format, validate_output_format
 from ocrpdf.render.html import block_font_pt
 
 
@@ -46,6 +46,11 @@ class EditSession:
             raise EditError(f"documento não encontrado: {self.path}") from None
         except (OSError, ValueError, TypeError, AttributeError, KeyError) as e:
             raise EditError(f"não foi possível ler {self.path}: {e}") from e
+        try:   # output editado à mão: erro claro aqui, não 500 em todas as páginas
+            if doc.output is not None:
+                validate_output_format(doc.output)
+        except ValueError as e:
+            raise EditError(f"formato gravado (output) inválido em {self.path}: {e}") from None
         self.doc, self._mtime, self.dirty = doc, mtime, False
 
     # --- consulta ---------------------------------------------------------

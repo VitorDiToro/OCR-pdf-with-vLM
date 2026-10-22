@@ -205,3 +205,16 @@ def test_applying_the_same_text_or_format_does_not_dirty(tmp_path):
     assert not s.dirty
     s.set_format(OutputFormat(page_size="a4"))
     assert s.dirty
+
+
+@pytest.mark.parametrize("output", [{"font_size_pt": "12"}, {"margin_cm": None}, {"page_size": 5}])
+def test_invalid_saved_format_is_refused_on_open_and_reload(tmp_path, output):
+    s, path = _make(tmp_path)
+    data = json.loads(path.read_text())
+    data["output"] = {**{"page_size": "a4", "margin_cm": 2, "font_size_pt": None, "header": True}, **output}
+    path.write_text(json.dumps(data))
+    with pytest.raises(EditError, match=r"formato gravado \(output\) inválido"):
+        s.reload()
+    assert s.doc.output is None                    # a sessão anterior fica
+    with pytest.raises(EditError, match=r"formato gravado \(output\) inválido"):
+        EditSession(path)

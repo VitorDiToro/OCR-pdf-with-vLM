@@ -386,8 +386,13 @@ async function run(label, fn) {
     await fn();
     return true;
   } catch (e) {
-    showError(e);
-    if (e instanceof ApiError && e.conflict) ui.conflict.hidden = false;   // oferece recarregar
+    if (e instanceof ApiError && e.conflict) {   // a faixa diz o motivo (mudou ou sumiu) e oferece recarregar
+      const msg = e.message;
+      ui.conflictReason.textContent = msg.charAt(0).toUpperCase() + msg.slice(1) + (msg.endsWith('.') ? '' : '.');
+      ui.conflict.hidden = false;
+    } else {
+      showError(e);
+    }
     return false;
   } finally {
     clearInterval(S.timer);
@@ -964,7 +969,7 @@ function bind() {
     resultInfo: $('result-info'), resultPages: $('result-pages'),
     origInfo: $('orig-info'), origWrap: $('orig-wrap'), origImg: $('orig-img'), origBoxes: $('orig-boxes'),
     leave: $('leave'), leaveText: $('leave-text'), conflict: $('conflict'), reload: $('reload'),
-    conflictMemory: $('conflict-memory'),
+    conflictReason: $('conflict-reason'), conflictMemory: $('conflict-memory'),
     leaveSave: $('leave-save'), leaveDiscard: $('leave-discard'), leaveStay: $('leave-stay'),
   });
 

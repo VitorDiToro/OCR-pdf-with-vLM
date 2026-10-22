@@ -340,17 +340,25 @@ def _find_original(session: EditSession, pdf: Path | None) -> Path | None:
     return None
 
 
+def _is_original(session: EditSession, output: Path, pdf: Path | None) -> bool:
+    """`output` é o `--pdf` ou o `source_path` (como estão ou relativos à pasta do document.json)?"""
+    names = [n for n in (pdf, session.doc.source_path) if n]
+    target = Path(output).resolve()
+    return any(target == p.resolve() for n in names for p in (Path(n), session.path.parent / n))
+
+
 def serve(document: Path, output: Path, pdf: Path | None, port: int = 0, open_browser: bool = True) -> None:
     """Abre o editor e bloqueia até Ctrl+C. Erros de início viram RuntimeError (a CLI mostra a mensagem)."""
     try:
         session = EditSession(document)
     except EditError as e:
         raise RuntimeError(str(e)) from None
+    if _is_original(session, output, pdf):   # os dois: o --pdf pode ser uma cópia do source_path
+        raise RuntimeError(f"o PDF de saída ({output}) é o próprio PDF escaneado (--pdf ou source_path); "
+                           "escolha outro com -o")
     original = _find_original(session, pdf)
     if original is None:
         print("ocrpdf: sem PDF original (use --pdf); a aba Original ficará indisponível")
-    elif Path(output).resolve() == original.resolve():
-        raise RuntimeError(f"o PDF de saída ({output}) é o próprio PDF escaneado; escolha outro com -o")
     try:
         server = make_server(session, output, original, port)
     except (OSError, OverflowError) as e:

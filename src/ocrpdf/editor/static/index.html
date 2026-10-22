@@ -28,7 +28,8 @@
 
   <!-- conflito: o document.json mudou no disco (aparece no 409 do Salvar / Renderizar tudo) -->
   <div id="conflict" class="bar bar-conflict" role="alert" hidden>
-    <span>O document.json mudou no disco desde que foi aberto ou gravado (outro programa ou outra janela).
+    <!-- o motivo é a mensagem do 409: "mudou no disco" ou "não está mais em …" (apagado ou renomeado) -->
+    <span><span id="conflict-reason">O document.json mudou no disco desde que foi aberto ou gravado.</span>
       Recarregar relê o arquivo; o texto e o formato desta página ficam na tela, não salvos, e o próximo
       Salvar os grava sobre o conteúdo novo.<span id="conflict-memory" hidden> Recarregar descarta também
       as alterações em memória de outras páginas e do "Justificar todos os parágrafos", ainda não

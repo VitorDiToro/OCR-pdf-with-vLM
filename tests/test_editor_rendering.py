@@ -120,7 +120,15 @@ def test_endnote_block_is_mapped_and_has_a_single_id(tmp_path):
     assert 'class="hl endnote" id="n1"' in render_html(doc, block_ids=True, highlight=2)
 
 
-def test_original_size_without_rasterizing(tmp_path):
+def test_original_size_without_rasterizing(tmp_path, monkeypatch):
+    import pypdfium2 as pdfium
+
     img, _ = benjamin_like_page()
     pdf = make_pdf(tmp_path / "s.pdf", [img], dpi=200)
-    assert rendering.original_size(pdf, 0) == original_image(pdf, 0)[1:]
+    expected = original_image(pdf, 0)[1:]
+
+    def no_render(*a, **k):
+        raise AssertionError("rasterizou a página")
+
+    monkeypatch.setattr(pdfium.PdfPage, "render", no_render)
+    assert rendering.original_size(pdf, 0) == expected

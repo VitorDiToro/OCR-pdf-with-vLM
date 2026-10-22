@@ -287,3 +287,15 @@ def test_space_before_lines_in_a_column_stays_inside_the_columns() -> None:
     assert html.count('class="cols"') == 1
     cols = html.split('class="cols"', 1)[1]
     assert cols.index("Parágrafo 1.") < cols.index('class="space"') < cols.index("Parágrafo 2.")
+
+
+def test_space_before_the_first_column_block_stays_outside_the_columns() -> None:
+    # dentro do div.cols, o espaço no topo empurraria só a 1ª coluna
+    doc = Document(columns=2, blocks=[Block(kind="title", spans=[Span("Título")])]
+                   + [Block(kind="paragraph", spans=[Span(f"Parágrafo {i}.")]) for i in range(4)])
+    for b in doc.blocks[1:]:
+        b.style.full_width = False
+    doc.blocks[1].style.space_before_lines = 1
+    html = _body_html(doc)
+    assert html.count('class="cols"') == 1
+    assert html.index("Título") < html.index('class="space"') < html.index('class="cols"')
