@@ -89,3 +89,7 @@ code.math-src { font-family: "Liberation Mono", monospace; font-size: 0.9em; }
 
 /* "page_break_before": true no style de um bloco do document.json (edição à mão) */
 .page-break { break-before: page; }
+
+/* bloco do cursor na prévia "Renderizar esta página" do editor (class="hl" só sai com highlight;
+   o PDF final nunca a recebe); outline não ocupa espaço, então a diagramação não muda */
+.hl { outline: 1.5pt solid #e09b00; outline-offset: 2pt; }

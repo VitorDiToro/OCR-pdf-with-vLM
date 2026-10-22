@@ -753,11 +753,12 @@ async function renderPage() {
   if (!fmt) return;
   const text = ui.ta.value;
   const hl = S.cur >= 0 && S.cur < S.blocks.length ? S.blocks[S.cur].index : null;
+  const hlN = S.cur + 1;
   await run('renderizando…', async () => {
     S.sessionTouched = true;   // o servidor aplica o texto à sessão (em memória)
     const r = await api('POST', '/api/render/page', { page: S.page, text, format: fmt, highlight: hl });
     ui.resultInfo.textContent = 'Prévia desta página (sem salvar). É aproximada: a quebra de página '
-      + 'pode diferir do PDF final.';
+      + 'pode diferir do PDF final.' + (hl === null ? '' : ` O bloco ${hlN} (cursor) sai contornado em laranja.`);
     showResults(r.images, r.images.map((_, k) => `prévia ${k + 1} de ${r.images.length}`));
   });
 }

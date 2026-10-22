@@ -38,6 +38,27 @@ def test_render_page_images_are_png(tmp_path):
     assert imgs and all(i.startswith(b"\x89PNG") for i in imgs)
 
 
+def _orange_pixels(png: bytes) -> int:
+    """Pixels do laranja do destaque (#e09b00, com antisserrilhamento)."""
+    import numpy as np
+    from PIL import Image
+
+    rgb = np.asarray(Image.open(io.BytesIO(png)).convert("RGB")).astype(int)
+    r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+    return int(((r > 180) & (g > 100) & (g < 200) & (b < 90) & (r - g > 40)).sum())
+
+
+def test_highlight_outlines_the_cursor_block_in_the_preview(tmp_path):
+    doc, fmt = _doc(), OutputFormat(page_size="a4")
+    plain = render_page_images(doc, [0, 1, 2], fmt, tmp_path)
+    marked = render_page_images(doc, [0, 1, 2], fmt, tmp_path, highlight=1)
+    assert _orange_pixels(plain[0]) == 0
+    assert _orange_pixels(marked[0]) > 500        # contorno visível em volta do bloco
+    # o PDF final nunca leva o destaque
+    render_full(doc, fmt, tmp_path / "final.pdf", tmp_path)
+    assert _orange_pixels(pdf_page_images(tmp_path / "final.pdf", [0])[0]) == 0
+
+
 def test_original_image_size(tmp_path):
     img, _ = benjamin_like_page()
     pdf = make_pdf(tmp_path / "s.pdf", [img], dpi=200)
