@@ -3,6 +3,7 @@
   ocrpdf convert entrada.pdf [-o saida.pdf]   # OCR + montagem + renderização
   ocrpdf analyze entrada.pdf [-w pasta]       # só OCR + montagem (gera document.json)
   ocrpdf render  pasta/document.json -o x.pdf # re-renderiza após editar o JSON
+  ocrpdf edit    pasta/document.json -o x.pdf # editor no navegador (local)
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from pathlib import Path
 
 import httpx
 
+from . import editor
 from .italic.stage import MODEL_RULES, uses_model
 from .model import Document, OutputFormat
 from .ocr.vlm import PRESETS, VlmEngine
@@ -105,6 +107,14 @@ def _parser() -> argparse.ArgumentParser:
     ren.add_argument("--no-header", action="store_true")
     _add_format_options(ren)
     ren.set_defaults(func=_render)
+
+    edi = sub.add_parser("edit", parents=[common], help="editor local do document.json no navegador")
+    edi.add_argument("document", type=Path)
+    edi.add_argument("-o", "--output", type=Path, required=True, help="PDF gerado pelo botão de renderizar")
+    edi.add_argument("--pdf", type=Path, help="PDF escaneado original (padrão: source_path do document.json)")
+    edi.add_argument("--port", type=int, default=0, help="porta em 127.0.0.1 (padrão: uma livre)")
+    edi.add_argument("--no-browser", action="store_true", help="não abre o navegador")
+    edi.set_defaults(func=_edit)
     return p
 
 
@@ -248,6 +258,11 @@ def _render(args) -> int:
         return 2
     render_pdf(doc, args.output, base_dir=args.document.parent, html_out=args.document.with_suffix(".html"))
     print(args.output)
+    return 0
+
+
+def _edit(args) -> int:
+    editor.serve(args.document, args.output, args.pdf, port=args.port, open_browser=not args.no_browser)
     return 0
 
 
