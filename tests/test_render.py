@@ -76,8 +76,8 @@ def test_without_line_policy_notes_are_deferred(tmp_path: Path, monkeypatch: pyt
     """footnote-policy auto: a nota que não cabe sob a chamada vai sozinha para a página seguinte."""
     original = render.render_html
 
-    def with_auto_policy(doc: Document) -> str:
-        html = original(doc)
+    def with_auto_policy(doc: Document, **kwargs) -> str:
+        html = original(doc, **kwargs)
         assert "footnote-policy: line;" in html
         return html.replace("footnote-policy: line;", "footnote-policy: auto;")
 
@@ -141,3 +141,161 @@ def test_page_break_before_survives_save_and_old_files_load_without_it(tmp_path:
         del b["style"]["page_break_before"]                   # document.json de antes do campo
     path.write_text(json.dumps(data))
     assert not any(b.style.page_break_before for b in Document.load(path).blocks)
+
+
+# --- ocultar bloco, linhas em branco, negrito/itálico do bloco ---------------
+
+def _page_text(pdf: Path) -> str:
+    return "".join(p.extract_text() for p in PdfReader(pdf).pages)
+
+
+def test_hidden_block_is_not_rendered(tmp_path: Path) -> None:
+    doc = _two_parts(1, None)
+    doc.blocks[2].style.hidden = True
+    out = tmp_path / "out.pdf"
+    render.render_pdf(doc, out, base_dir=tmp_path)
+    text = _page_text(out)
+    assert "Segunda parte" not in text
+    assert "Primeira parte" in text and "Texto curto da primeira" in text and "Texto curto da segunda" in text
+
+
+def test_hidden_block_keeps_its_trailing_notes_and_drops_its_own_calls(tmp_path: Path) -> None:
+    doc = _two_parts(1, None)
+    doc.notes = {"n1": Note("n1", "1", "footnote", 0, [Block("paragraph", [Span("TextoDaN1")])]),
+                 "n2": Note("n2", "2", "footnote", 0, [Block("paragraph", [Span("TextoDaN2")])])}
+    hidden = doc.blocks[1]
+    hidden.spans = [Span("Texto oculto"), Span("1", sup=True, note="n1")]
+    hidden.trailing_notes = ["n2"]
+    hidden.style.hidden = True
+    out = tmp_path / "out.pdf"
+    render.render_pdf(doc, out, base_dir=tmp_path)
+    text = _page_text(out)
+    assert "TextoDaN2" in text
+    assert "TextoDaN1" not in text and "Texto oculto" not in text
+
+
+def test_space_before_lines_adds_blank_lines(tmp_path: Path) -> None:
+    def second_y(lines: int) -> float:
+        doc = _two_parts(1, None)
+        doc.blocks[3].style.space_before_lines = lines
+        out = tmp_path / f"out{lines}.pdf"
+        render.render_pdf(doc, out, base_dir=tmp_path)
+        return next(y for t, _, y in _text_positions(out) if "da segunda" in t)
+
+    shift = second_y(0) - second_y(3)
+    assert shift == pytest.approx(3 * 1.2 * 10, abs=2)
+
+
+def test_block_bold_and_italic_override() -> None:
+    doc = _two_parts(1, None)
+    doc.blocks[0].style.bold = False
+    doc.blocks[1].style.italic = True
+    html = render.render_html(doc)
+    assert 'font-weight:normal' in html.split("<h2", 1)[1].split(">", 1)[0]
+    assert 'font-style:italic' in html.split("<p", 1)[1].split(">", 1)[0]
+    plain = render.render_html(_two_parts(1, None))
+    assert "font-weight" not in plain.split("<body>", 1)[1]
+    assert "font-style" not in plain.split("<body>", 1)[1]
+
+
+def _body_html(doc: Document) -> str:
+    return render.render_html(doc).split("<body>", 1)[1]
+
+
+def test_block_override_false_also_removes_the_marks_of_the_spans() -> None:
+    doc = _two_parts(1, None)
+    doc.blocks[0].spans = [Span("Primeira "), Span("parte", bold=True, italic=True)]
+    doc.blocks[1].spans = [Span("Texto "), Span("todo em itálico", italic=True), Span("1", sup=True, italic=True)]
+    plain = _body_html(doc)
+    assert "<b><i>parte</i></b>" in plain and "<i>todo em itálico</i>" in plain   # padrão: as marcas valem
+
+    doc.blocks[1].style.italic = False
+    doc.blocks[0].style.bold = False
+    html = _body_html(doc)
+    p = html.split("<p", 1)[1].split("</p>", 1)[0]
+    assert "<i>" not in p and "font-style:normal" in p
+    h2 = html.split("<h2", 1)[1].split("</h2>", 1)[0]
+    assert "<b>" not in h2 and "font-weight:normal" in h2
+    assert "<i>parte</i>" in h2           # só a marca desligada sai; o itálico do trecho fica
+
+    doc.blocks[1].style.italic = True     # ligado: as marcas dos trechos não atrapalham
+    assert "<i>todo em itálico</i>" in _body_html(doc)
+
+
+def test_block_override_false_spares_the_notes_of_the_block() -> None:
+    doc = _two_parts(1, None)
+    doc.notes = {"n1": Note("n1", "1", "footnote", 0, [Block("paragraph", [Span("Obra", italic=True)])])}
+    doc.blocks[1].spans = [Span("Texto", italic=True), Span("1", sup=True, note="n1")]
+    doc.blocks[1].style.italic = False
+    html = _body_html(doc)
+    assert "<i>Texto</i>" not in html and "<i>Obra</i>" in html
+
+
+def test_new_fields_survive_save_and_old_files_load(tmp_path: Path) -> None:
+    from ocrpdf.model import OutputFormat
+
+    doc = _two_parts(1, None)
+    st = doc.blocks[1].style
+    st.hidden, st.space_before_lines, st.bold, st.italic = True, 2, True, False
+    doc.output = OutputFormat(page_size="A4", margin_cm=2.0, font_size_pt=12.0, header=False)
+    doc.source_path = "/tmp/x.pdf"
+    path = tmp_path / "document.json"
+    doc.save(path)
+    back = Document.load(path)
+    st = back.blocks[1].style
+    assert (st.hidden, st.space_before_lines, st.bold, st.italic) == (True, 2, True, False)
+    assert back.output == doc.output and back.source_path == "/tmp/x.pdf"
+
+    data = json.loads(path.read_text())
+    for key in ("output", "source_path"):
+        del data[key]
+    for b in data["blocks"]:
+        for key in ("hidden", "space_before_lines", "bold", "italic"):
+            del b["style"][key]
+    path.write_text(json.dumps(data))
+    old = Document.load(path)
+    st = old.blocks[1].style
+    assert (st.hidden, st.space_before_lines, st.bold, st.italic) == (False, 0, None, None)
+    assert old.output is None and old.source_path == ""
+
+
+def test_hidden_block_passes_its_page_break_to_the_next_visible_block(tmp_path: Path) -> None:
+    # ocultar o título que abre a 2ª parte não pode levar junto a quebra de página
+    doc = _two_parts(1, 2)
+    doc.blocks[2].style.hidden = True
+    doc.blocks[2].style.space_before_lines = 3              # o espaço do oculto vai com ele
+    out = tmp_path / "out.pdf"
+    render.render_pdf(doc, out, base_dir=tmp_path)
+    first, second = (p.extract_text() for p in PdfReader(out).pages)
+    assert "Segunda parte" not in first + second and "segunda" not in first
+    assert second.lstrip().startswith("Texto curto da segunda")
+    assert 'class="space"' not in _body_html(doc)
+    # oculto com quebra antes do 1º bloco visível (e com nota sem chamada): nada antes do 1º bloco
+    doc = _two_parts(1, 0)
+    doc.notes = {"n1": Note("n1", "1", "footnote", 0, [Block("paragraph", [Span("TextoDaN1")])])}
+    doc.blocks[0].style.hidden = True
+    doc.blocks[0].trailing_notes = ["n1"]
+    assert "page-break" not in _body_html(doc)
+
+
+def test_space_before_lines_in_a_column_stays_inside_the_columns() -> None:
+    doc = Document(columns=2, blocks=[Block(kind="paragraph", spans=[Span(f"Parágrafo {i}.")]) for i in range(4)])
+    for b in doc.blocks:
+        b.style.full_width = False
+    doc.blocks[2].style.space_before_lines = 2
+    html = _body_html(doc)
+    assert html.count('class="cols"') == 1
+    cols = html.split('class="cols"', 1)[1]
+    assert cols.index("Parágrafo 1.") < cols.index('class="space"') < cols.index("Parágrafo 2.")
+
+
+def test_space_before_the_first_column_block_stays_outside_the_columns() -> None:
+    # dentro do div.cols, o espaço no topo empurraria só a 1ª coluna
+    doc = Document(columns=2, blocks=[Block(kind="title", spans=[Span("Título")])]
+                   + [Block(kind="paragraph", spans=[Span(f"Parágrafo {i}.")]) for i in range(4)])
+    for b in doc.blocks[1:]:
+        b.style.full_width = False
+    doc.blocks[1].style.space_before_lines = 1
+    html = _body_html(doc)
+    assert html.count('class="cols"') == 1
+    assert html.index("Título") < html.index('class="space"') < html.index('class="cols"')

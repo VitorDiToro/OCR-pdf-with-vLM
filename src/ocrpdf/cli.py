@@ -3,12 +3,15 @@
   ocrpdf convert entrada.pdf [-o saida.pdf]   # OCR + montagem + renderização
   ocrpdf analyze entrada.pdf [-w pasta]       # só OCR + montagem (gera document.json)
   ocrpdf render  pasta/document.json -o x.pdf # re-renderiza após editar o JSON
+  ocrpdf edit    pasta/document.json -o x.pdf # editor no navegador (local)
 """
 
 from __future__ import annotations
 
 import argparse
+import copy
 import logging
+import math
 import signal
 import sys
 from contextlib import contextmanager
@@ -16,10 +19,11 @@ from pathlib import Path
 
 import httpx
 
+from . import editor
 from .italic.stage import MODEL_RULES, uses_model
-from .model import Document
+from .model import Document, OutputFormat
 from .ocr.vlm import PRESETS, VlmEngine
-from .output_format import apply_output_format, parse_page_size
+from .output_format import apply_format, parse_page_size
 from .pipeline import ItalicConfig, Pipeline
 from .render import render_pdf
 from .servers import ITALIC_HF_MODEL, ITALIC_SERVER_ENV, RestartSwitcher, SleepSwitcher, Switcher, default_script
@@ -91,7 +95,6 @@ def _parser() -> argparse.ArgumentParser:
 
     conv = sub.add_parser("convert", parents=[ocr], help="OCR + renderização")
     conv.add_argument("-o", "--output", type=Path, help="PDF de saída (padrão: <entrada>_ocr.pdf)")
-    conv.add_argument("--no-header", action="store_true", help="omite o cabeçalho corrente")
     _add_format_options(conv)
     conv.set_defaults(func=_convert)
 
@@ -101,26 +104,36 @@ def _parser() -> argparse.ArgumentParser:
     ren = sub.add_parser("render", parents=[common], help="renderiza um document.json")
     ren.add_argument("document", type=Path)
     ren.add_argument("-o", "--output", type=Path, required=True)
-    ren.add_argument("--no-header", action="store_true")
     _add_format_options(ren)
     ren.set_defaults(func=_render)
+
+    edi = sub.add_parser("edit", parents=[common], help="editor local do document.json no navegador")
+    edi.add_argument("document", type=Path)
+    edi.add_argument("-o", "--output", type=Path, required=True, help="PDF gerado pelo botão de renderizar")
+    edi.add_argument("--pdf", type=Path, help="PDF escaneado original (padrão: source_path do document.json)")
+    edi.add_argument("--port", type=int, default=0, help="porta em 127.0.0.1 (padrão: uma livre)")
+    edi.add_argument("--no-browser", action="store_true", help="não abre o navegador")
+    edi.set_defaults(func=_edit)
     return p
 
 
 def _add_format_options(p: argparse.ArgumentParser) -> None:
-    """Formato de saída (só na renderização; o document.json guarda o formato original)."""
+    """Formato de saída; o `convert` o grava no document.json e o `render` usa o gravado, com a opção por cima."""
     p.add_argument("--page-size", type=_page_size_arg, default=None, metavar="TAMANHO",
-                   help="original (padrão) | a4 | <largura>x<altura> em cm, ex.: 17,6x25")
-    p.add_argument("--margin", type=float, default=2.5,
-                   help="margens em cm, decimal com ponto (padrão 2.5); só vale quando --page-size não é original")
+                   help="original | a4 | <largura>x<altura> em cm, ex.: 17,6x25 (padrão original ou o gravado)")
+    p.add_argument("--margin", type=float, default=None,
+                   help="margens em cm, decimal com ponto (padrão 2.5 ou o gravado); só vale quando --page-size não é original")
     p.add_argument("--font-size", type=_font_size_arg, default=None, metavar="PT",
-                   help="tamanho do corpo em pt, decimal com ponto; títulos, notas e cabeçalho escalam junto (padrão: o medido)")
+                   help="tamanho do corpo em pt, decimal com ponto; títulos, notas e cabeçalho escalam junto (padrão: o gravado ou o medido)")
+    p.add_argument("--header", action=argparse.BooleanOptionalAction, default=None,
+                   help="liga/desliga o cabeçalho corrente (padrão: o gravado; sem ele, ligado)")
 
 
-def _page_size_arg(spec: str):
-    """parse_page_size para o argparse: só ArgumentTypeError mostra a mensagem em português."""
+def _page_size_arg(spec: str) -> str:
+    """Valida com parse_page_size e devolve o texto; só ArgumentTypeError mostra a mensagem em português."""
     try:
-        return parse_page_size(spec)
+        parse_page_size(spec)
+        return spec.strip()
     except ValueError as e:
         raise argparse.ArgumentTypeError(str(e)) from None
 
@@ -130,18 +143,36 @@ def _font_size_arg(spec: str) -> float:
         value = float(spec)
     except ValueError:
         raise argparse.ArgumentTypeError(f"tamanho de fonte inválido: {spec}") from None
-    if value <= 0:
+    if not (math.isfinite(value) and value > 0):
         raise argparse.ArgumentTypeError("o tamanho da fonte deve ser positivo")
     return value
 
 
+def _output_format(args, saved: OutputFormat | None) -> OutputFormat:
+    """Formato gravado (ou o padrão) com as opções passadas por cima."""
+    fmt = copy.copy(saved) if saved else OutputFormat()
+    if args.page_size is not None:
+        fmt.page_size = args.page_size
+    if args.margin is not None:
+        fmt.margin_cm = args.margin
+    if args.font_size is not None:
+        fmt.font_size_pt = args.font_size
+    if args.header is not None:
+        fmt.header = args.header
+    return fmt
+
+
 def _formatted(args, doc: Document) -> Document | None:
-    """Aplica as opções de formato; em caso de valor inválido, avisa e devolve None."""
+    """Aplica o formato (gravado + opções); em caso de valor inválido, avisa e devolve None."""
     try:
-        return apply_output_format(doc, args.page_size, args.margin, args.font_size)
+        return apply_format(doc, _output_format(args, doc.output))
     except ValueError as e:
         print(f"ocrpdf: erro: {e}", file=sys.stderr)
         return None
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    return a.resolve() == b.resolve()
 
 
 def _work_dir(args, output: Path | None) -> Path:
@@ -205,13 +236,17 @@ def _port(url: str) -> int:
 
 def _convert(args) -> int:
     output = args.output or args.input.with_name(args.input.stem + "_ocr.pdf")
+    if _same_file(output, args.input):
+        print(f"ocrpdf: erro: o PDF de saída ({output}) é o próprio PDF escaneado; escolha outro com -o",
+              file=sys.stderr)
+        return 2
     # erros de formato (margem grande demais para a página) aparecem antes do OCR, que é demorado
     if _formatted(args, Document()) is None:
         return 2
     work = _work_dir(args, output)
     doc = _run_analysis(args, work)
-    if args.no_header:
-        doc.running_header = ""
+    doc.output = _output_format(args, None)
+    doc.save(work / "document.json")
     if (doc := _formatted(args, doc)) is None:
         return 2
     render_pdf(doc, output, base_dir=work, html_out=work / "document.html")
@@ -228,12 +263,21 @@ def _analyze(args) -> int:
 
 def _render(args) -> int:
     doc = Document.load(args.document)
-    if args.no_header:
-        doc.running_header = ""
+    # source_path: absoluto, ou relativo à pasta do document.json (como no editor)
+    if doc.source_path and any(_same_file(args.output, p) for p in
+                               (Path(doc.source_path), args.document.parent / doc.source_path)):
+        print(f"ocrpdf: erro: o PDF de saída ({args.output}) é o PDF escaneado de origem do documento "
+              "(source_path); escolha outro com -o", file=sys.stderr)
+        return 2
     if (doc := _formatted(args, doc)) is None:
         return 2
     render_pdf(doc, args.output, base_dir=args.document.parent, html_out=args.document.with_suffix(".html"))
     print(args.output)
+    return 0
+
+
+def _edit(args) -> int:
+    editor.serve(args.document, args.output, args.pdf, port=args.port, open_browser=not args.no_browser)
     return 0
 
 

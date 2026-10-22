@@ -66,3 +66,11 @@ def test_overlaps_only_between_neighbours_of_the_same_column():
     assert _overlaps(b, [(900, 500, 1547, 556)]) == (12, 0)    # vizinho estreito na mesma coluna
     assert _overlaps(b, [(1600, 398, 1690, 556)]) == (0, 0)    # outra coluna
     assert _overlaps(b, [(151, 600, 1547, 650)]) == (0, 0)     # dentro do bloco: não é borda
+
+
+def test_analyze_saves_source_path(tmp_path):
+    from ocrpdf.model import Document
+    image, regions = benjamin_like_page()
+    pdf = make_pdf(tmp_path / "in.pdf", [image])
+    Pipeline(FakeEngine([regions]), tmp_path / "w", workers=1).analyze(pdf, font="sans")
+    assert Document.load(tmp_path / "w" / "document.json").source_path == str(pdf.resolve())

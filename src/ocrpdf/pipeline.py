@@ -107,6 +107,7 @@ class Pipeline:
         layouts = [PageLayout.load(self._cache(i)) for i in indices]
         doc = assemble(layouts, source=pdf_path.name, font_family=family, italic=italic)
         doc.lang = lang
+        doc.source_path = str(pdf_path.resolve())
         doc.save(self.work / "document.json")
         return doc
 
