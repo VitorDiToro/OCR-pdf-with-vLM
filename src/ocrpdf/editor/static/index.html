@@ -1,4 +1,101 @@
 <!doctype html>
+<html lang="pt-BR">
+<head>
 <meta charset="utf-8">
-<title>ocrpdf editor</title>
-<p>Editor em construção.</p>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ocrpdf edit</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<header>
+  <!-- 1ª faixa: navegação, gravação, renderização, estado -->
+  <div class="bar bar-top">
+    <span class="nav">
+      <button id="prev" type="button" title="Página anterior do original">◀</button>
+      <label>página do original <select id="page-select"></select></label>
+      <span>de <span id="page-count">–</span></span>
+      <button id="next" type="button" title="Próxima página do original">▶</button>
+    </span>
+    <button id="save" type="button" title="Grava o document.json (Ctrl+S)">Salvar</button>
+    <button id="render-page" type="button" title="Prévia só desta página, sem salvar (Ctrl+Enter)">Renderizar esta página</button>
+    <button id="render-all" type="button" title="Salva e gera o PDF final">Renderizar tudo</button>
+    <button id="justify-all" type="button" title="Justifica os parágrafos de todas as páginas (falta salvar depois)">Justificar todos os parágrafos</button>
+    <span id="status" class="status" role="status" aria-live="polite">carregando…</span>
+    <span id="message" class="message" aria-live="polite"></span>
+  </div>
+
+  <!-- 2ª faixa: formato do PDF (gravado no document.json) -->
+  <div class="bar bar-format">
+    <span class="bar-label">Formato do PDF:</span>
+    <label>página <input id="fmt-page" type="text" size="10" list="page-sizes" autocomplete="off" spellcheck="false"></label>
+    <span class="hint">(original | a4 | LxA cm)</span>
+    <datalist id="page-sizes"><option value="original"><option value="a4"></datalist>
+    <label>margem <input id="fmt-margin" type="text" size="4" inputmode="decimal" autocomplete="off"> cm</label>
+    <label>corpo <input id="fmt-body" type="text" size="5" inputmode="decimal" autocomplete="off" placeholder="medido"> pt</label>
+    <label><input id="fmt-header" type="checkbox"> cabeçalho corrente</label>
+  </div>
+
+  <!-- 3ª faixa: ações no bloco onde está o cursor -->
+  <div class="bar bar-block">
+    <span id="block-label" class="block-label">bloco –</span>
+    <button id="b-bold" type="button" aria-pressed="false" title="Bloco inteiro em negrito / sem negrito">Negrito</button>
+    <button id="b-italic" type="button" aria-pressed="false" title="Bloco inteiro em itálico / sem itálico">Itálico</button>
+    <button id="b-justify" type="button">Justificar parágrafo</button>
+    <button id="b-break" type="button" aria-pressed="false" title="O bloco começa numa página nova">Quebra de página antes</button>
+    <span class="group">
+      <button id="b-less" type="button" title="Tira uma linha em branco antes do bloco">− linha</button>
+      <span id="b-lines" class="count" title="linhas em branco antes do bloco">0</span>
+      <button id="b-more" type="button" title="Põe uma linha em branco antes do bloco">+ linha em branco antes</button>
+    </span>
+    <label title="Tamanho no PDF, com o corpo da faixa de formato; Enter aplica; vazio = padrão">Tamanho (pt)
+      <input id="b-size" type="text" size="5" inputmode="decimal" autocomplete="off"></label>
+    <button id="b-hide" type="button" class="danger" aria-pressed="false">Ocultar bloco</button>
+  </div>
+</header>
+
+<main>
+  <section class="left" aria-label="Blocos da página (JSON)">
+    <div class="editor">
+      <div class="gutter" aria-hidden="true"><div id="gutter-lines" class="code"></div></div>
+      <textarea id="text" class="code" spellcheck="false" autocomplete="off" autocapitalize="off"
+                aria-label="JSON dos blocos da página"></textarea>
+    </div>
+  </section>
+
+  <section class="right">
+    <div class="tabs" role="tablist">
+      <button id="tab-result" type="button" role="tab" aria-selected="false" aria-controls="pane-result">Resultado</button>
+      <button id="tab-original" type="button" role="tab" aria-selected="true" aria-controls="pane-original">Original</button>
+    </div>
+    <div id="pane-result" class="pane" role="tabpanel" hidden>
+      <p id="result-info" class="pane-info"></p>
+      <div id="result-pages" class="pages"></div>
+    </div>
+    <div id="pane-original" class="pane" role="tabpanel">
+      <p id="orig-info" class="pane-info"></p>
+      <div id="orig-wrap" class="orig">
+        <img id="orig-img" alt="Página escaneada do original">
+        <div id="orig-boxes"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- painel de troca de página com alterações não salvas (sem diálogos do navegador) -->
+<div id="leave" class="overlay" hidden>
+  <div class="panel" role="dialog" aria-modal="true" aria-labelledby="leave-text">
+    <p id="leave-text">Há alterações não salvas nesta página.</p>
+    <div class="panel-buttons">
+      <button id="leave-save" type="button">Salvar</button>
+      <button id="leave-discard" type="button">Descartar</button>
+      <button id="leave-stay" type="button">Ficar</button>
+    </div>
+  </div>
+</div>
+
+<!-- espelho invisível do textarea: mede a altura de cada linha (com quebra) para a numeração -->
+<div id="mirror" class="code" aria-hidden="true"></div>
+</body>
+</html>
