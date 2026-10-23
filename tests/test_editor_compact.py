@@ -26,7 +26,7 @@ def test_roundtrip_keeps_everything():
         style=BlockStyle(
             align="center", indent_em=1.5, block_indent_em=2.0, font_size_pt=12.0, full_width=False,
             rule_below=Rule(0.5, 3.0, 1.0, 0.25), page_break_before=True,
-            space_before_lines=2, hidden=True, bold=True, italic=False,
+            space_before_lines=2, space_after_lines=0.5, hidden=True, bold=True, italic=False,
         ),
         source=Source(page=3, bbox=(1.0, 2.0, 3.0, 4.0)),
     )
@@ -72,6 +72,8 @@ def test_integer_float_space_before_lines_roundtrips_as_int():
     data = json.loads(json.dumps(to_compact(b)))
     back = from_compact(b, data)
     assert back.style.space_before_lines == 1 and type(back.style.space_before_lines) is int
-    for bad in (1.5, -1.0, True):
-        with pytest.raises(ValueError, match="space_before_lines"):
-            from_compact(b, {"kind": "paragraph", "style": {"space_before_lines": bad}})
+    for field in ("space_before_lines", "space_after_lines"):
+        assert getattr(from_compact(b, {"kind": "paragraph", "style": {field: 1.5}}).style, field) == 1.5
+        for bad in (-1.0, -0.5, True, "1"):
+            with pytest.raises(ValueError, match=field):
+                from_compact(b, {"kind": "paragraph", "style": {field: bad}})

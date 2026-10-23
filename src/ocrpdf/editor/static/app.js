@@ -214,7 +214,7 @@ function isHidden(b) { return styleOf(b).hidden === true; }
 function hasBreak(b) { return styleOf(b).page_break_before === true; }
 function linesBefore(b) {
   const n = styleOf(b).space_before_lines;
-  return Number.isInteger(n) && n > 0 ? n : 0;
+  return typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : 0;   // aceita fração (0.5)
 }
 
 /** Aplica uma ação da barra do bloco ao objeto `b` (forma compacta), no lugar. */

@@ -229,6 +229,7 @@ def _cover(tmp_path) -> tuple[EditSession, object]:
         kind="title", level=1,
         spans=[Span("CONTRIBUIÇÃO À CRÍTICA DA ECONOMIA POLÍTICA "), Span("Tradução", italic=True)],
         style=BlockStyle(align="center", font_size_pt=20.0, page_break_before=True, space_before_lines=2,
+                         space_after_lines=1.5,
                          rule_above=rule, rule_below=rule),
         trailing_notes=["n1"], source=Source(page=0, bbox=(1, 2, 3, 4)),
     )
@@ -256,6 +257,7 @@ def test_split_block_at_the_mark(tmp_path):
     # o que vem "antes" fica no 1º; o que vem "depois", no 2º; o resto do estilo vale para os dois
     assert (a.style.page_break_before, a.style.space_before_lines) == (True, 2)
     assert (b.style.page_break_before, b.style.space_before_lines) == (False, 0)
+    assert (a.style.space_after_lines, b.style.space_after_lines) == (0, 1.5)
     assert a.style.rule_above and not a.style.rule_below
     assert b.style.rule_below and not b.style.rule_above
     assert a.style.font_size_pt == b.style.font_size_pt == 20.0 and b.style.align == "center"

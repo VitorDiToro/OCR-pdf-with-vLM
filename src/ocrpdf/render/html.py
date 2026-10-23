@@ -56,6 +56,7 @@ class _HtmlRenderer:
         group: list[str] = []
         shown = False          # já saiu algum bloco visível
         page_break = False     # quebra de página de um bloco oculto, à espera do próximo visível
+        after = 0.0            # linhas em branco depois do último bloco visível, à espera do próximo
         for self.index, block in enumerate(self.doc.blocks):
             cols = self.doc.columns > 1 and not block.style.full_width
             if block.style.hidden:
@@ -71,14 +72,16 @@ class _HtmlRenderer:
                     body.append(self._columns(group))
                     group = []
                 body.append('<div class="page-break"></div>')
+                after = 0.0    # a quebra já separa: o espaço cairia no fim da página
             page_break, shown = False, True
-            if block.style.space_before_lines > 0:
+            lines, after = block.style.space_before_lines + after, block.style.space_after_lines
+            if lines > 0:
                 # bloco de coluna no meio do grupo: o espaço fica dentro do div.cols (fechá-lo rebalancearia
                 # as colunas); no início do grupo, fora dele (dentro, empurraria só a 1ª coluna)
                 if group and not cols:
                     body.append(self._columns(group))
                     group = []
-                height = block.style.space_before_lines * self.doc.line_height * self.doc.body_font_pt
+                height = lines * self.doc.line_height * self.doc.body_font_pt
                 (group if cols and group else body).append(f'<div class="space" style="height:{height:g}pt"></div>')
             if cols:
                 group.append(html)

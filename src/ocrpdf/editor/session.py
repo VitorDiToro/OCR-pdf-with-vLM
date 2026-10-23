@@ -153,7 +153,8 @@ class EditSession:
         new = deepcopy(block)
         new.spans = second
         new.style = replace(new.style, page_break_before=False, space_before_lines=0, rule_above=None)
-        parsed[k] = (i, replace(block, spans=first, trailing_notes=[], style=replace(block.style, rule_below=None)))
+        parsed[k] = (i, replace(block, spans=first, trailing_notes=[],
+                                style=replace(block.style, rule_below=None, space_after_lines=0)))
         self._commit(parsed)
         self.doc.blocks.insert(i + 1, new)
         self.dirty = True

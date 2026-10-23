@@ -10,7 +10,7 @@ from ocrpdf.model import Block, BlockStyle, Span
 
 EDITABLE_STYLE = (
     "align", "indent_em", "block_indent_em", "font_size_pt", "page_break_before",
-    "space_before_lines", "hidden", "bold", "italic",
+    "space_before_lines", "space_after_lines", "hidden", "bold", "italic",
 )
 _MARKS = ("italic", "bold", "sup", "sub", "math")
 _ALIGNS = ("justify", "left", "center", "right")
@@ -102,11 +102,11 @@ def _style(base: BlockStyle, d: object) -> BlockStyle:
         if not _is_num(fs) or fs <= 0:
             raise ValueError("font_size_pt deve ser um número positivo")
         v["font_size_pt"] = float(fs)
-    n = v["space_before_lines"]
-    if isinstance(n, float) and n.is_integer():
-        n = v["space_before_lines"] = int(n)   # 1.0 (document.json editado à mão) vale 1
-    if not isinstance(n, int) or isinstance(n, bool) or n < 0:
-        raise ValueError("space_before_lines deve ser um inteiro não negativo")
+    for f in ("space_before_lines", "space_after_lines"):
+        n = v[f]
+        if not _is_num(n) or n < 0:
+            raise ValueError(f"{f} deve ser um número não negativo (linhas; aceita fração)")
+        v[f] = int(n) if float(n).is_integer() else float(n)   # 1.0 vale 1: o JSON continua com inteiros
     for f in ("page_break_before", "hidden"):
         if not isinstance(v[f], bool):
             raise ValueError(f"{f} deve ser true ou false")

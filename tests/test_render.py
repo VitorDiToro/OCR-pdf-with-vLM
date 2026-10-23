@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -332,3 +333,44 @@ def test_block_indent_moves_the_whole_block(tmp_path: Path, align: str, sign: in
         return next(x for t, x, _ in _text_positions(out) if "da segunda" in t)
 
     assert (x(3) - x(0)) * sign == pytest.approx(3 * 10, abs=1)
+
+
+
+def _spaces(doc: Document) -> list[str]:
+    """Alturas dos div.space, na ordem."""
+    return re.findall(r'class="space" style="height:([0-9.]+)pt"', _body_html(doc))
+
+
+def test_space_after_lines_adds_blank_lines(tmp_path: Path) -> None:
+    def second_y(lines: float) -> float:
+        doc = _two_parts(1, None)
+        doc.blocks[2].style.space_after_lines = lines     # depois do título da segunda parte
+        out = tmp_path / f"out{lines}.pdf"
+        render.render_pdf(doc, out, base_dir=tmp_path)
+        return next(y for t, _, y in _text_positions(out) if "da segunda" in t)
+
+    assert second_y(0) - second_y(3) == pytest.approx(3 * 1.2 * 10, abs=2)
+    assert second_y(0) - second_y(0.5) == pytest.approx(0.5 * 1.2 * 10, abs=1)
+
+
+def test_space_after_goes_before_the_next_visible_block() -> None:
+    doc = _two_parts(1, None)
+    doc.blocks[0].style.space_after_lines = 1
+    doc.blocks[1].style.space_before_lines = 2
+    assert _spaces(doc) == ["36"]                         # soma com o "antes" do seguinte: um espaço só
+    doc.blocks[1].style.hidden = True                     # o seguinte oculto: vale o próximo visível
+    assert _spaces(doc) == ["12"]
+    doc.blocks[0].style.hidden = True                     # o espaço depois de um oculto vai com ele
+    assert _spaces(doc) == []
+    doc = _two_parts(1, 2)
+    doc.blocks[1].style.space_after_lines = 2             # a quebra de página já separa
+    doc.blocks[3].style.space_after_lines = 2             # o último bloco: nada depois dele
+    assert _spaces(doc) == []
+
+
+def test_space_after_a_column_block_before_a_full_width_one_stays_outside_the_columns() -> None:
+    doc = _two_parts(2, None)
+    doc.blocks[2].style.full_width = True
+    doc.blocks[1].style.space_after_lines = 1
+    html = _body_html(doc)
+    assert html.index("primeira parte.") < html.index("</div>") < html.index('class="space"') < html.index("Segunda")
