@@ -65,7 +65,7 @@ Edição do `document.json`: `ocrpdf edit <work>/document.json -o final.pdf [--p
 [--port N] [--no-browser]` abre um editor local no navegador (só 127.0.0.1, sem CDN). Navega pela
 página do original (`source.page`); à esquerda, o JSON compacto dos blocos da página (só texto,
 marcas ligadas e `style` fora do padrão; mesmo número e `kind` de blocos ao salvar, remover =
-ocultar); à direita, abas Resultado e Original (escaneado, blocos numerados). Botões: Salvar
+ocultar, criar = Dividir no cursor); à direita, abas Resultado e Original (escaneado, blocos numerados). Botões: Salvar
 (atômico; cria `<nome>.orig.json` uma vez; se o arquivo mudou no disco ou sumiu, recusa com 409 e a
 página oferece **Recarregar do disco**: `POST /api/reload` relê o arquivo e descarta a memória, e a
 faixa avisa antes quando há alterações só em memória; o texto e o formato da tela ficam, não salvos,
@@ -74,7 +74,11 @@ fora da 1ª página do documento, com cabeçalho mesmo se `header_on_first_page`
 tudo (salva antes; igual ao `ocrpdf render`, inclusive o `document.html`; mostra as páginas finais do
 1º bloco da página até onde começa o bloco visível seguinte), Justificar todos os
 parágrafos, e por bloco negrito/itálico (estado efetivo: sobrescrito, ou título/todos os trechos
-marcados), justificar, quebra de página, + linha em branco, ocultar, tamanho (pt na escala da saída).
+marcados), justificar, quebra de página, + linha em branco, ocultar, tamanho (pt na escala da saída),
+**Dividir no cursor** (`POST /api/split`: a página envia o texto com `\ue000` no cursor; a sessão parte
+o bloco de texto ali, os dois herdam tipo, `source` e estilo; quebra, linhas antes e filete de cima ficam
+no 1º, filete de baixo e notas sem chamada no 2º; como o Justificar todos, fica na sessão até Salvar;
+na aba Original os dois dividem a caixa, com o rótulo "2–3").
 A faixa de formato edita `document.output`. O original vem de `--pdf` ou de `doc.source_path`
 (gravado pelo `analyze`/`convert`; sem ele a aba Original avisa). Erros de início (documento
 inexistente ou inválido, inclusive o `output` gravado, porta ocupada) saem como `ocrpdf: erro: …`, código 1.
@@ -304,7 +308,8 @@ Ainda não exercitado: ziamath inline, colunas, tabelas, figuras, presets `qwen2
      documento (corpo ≤ 9 pt, ou itálico oblíquo sintético) antes de confiar na regra fora disso.
    - Herança de palavra curta na regra `slant` (revisão do PR #1): Benjamin pares 89,2 → 98,4 de
      cobertura, mas a precisão do Horkheimer cai para 96,6 (< 98,2 da referência). Não adotada.
-2. Editor: v1 sem negrito/itálico parcial, sem editar notas, sem inserir/reordenar blocos.
+2. Editor: v1 sem negrito/itálico parcial, sem editar notas, sem juntar/reordenar blocos (criar só
+   dividindo um bloco).
    Pendências conhecidas (PR #2): num bloco com marca parcial, dois cliques em Negrito/Itálico não voltam
    ao original (apagar o campo volta); a prévia mostra cabeçalho se todos os blocos da 1ª página do
    original estão ocultos; "Renderizar tudo" pode mostrar uma página a mais quando o bloco seguinte

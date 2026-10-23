@@ -303,6 +303,15 @@ def _handler(app: _App) -> type[BaseHTTPRequestHandler]:
                     app.session.apply_page(page, text)
                 self._json({"ok": True})
 
+            def split(p, q):
+                body = self._body()
+                with app.state_lock:
+                    page = app.check_page(_int(q.get("n"), "n"))
+                    text = body.get("text")
+                    if not isinstance(text, str):
+                        raise _HttpError(400, "campo 'text' ausente")
+                    self._json({"block": app.session.split_block(page, text)})
+
             def justify(p, q):
                 with app.state_lock:
                     self._json({"changed": app.session.justify_all()})
@@ -313,6 +322,7 @@ def _handler(app: _App) -> type[BaseHTTPRequestHandler]:
 
             self._dispatch([
                 (lambda p: p == "/api/page", page_post),
+                (lambda p: p == "/api/split", split),
                 (lambda p: p == "/api/justify-all", justify),
                 (lambda p: p == "/api/save", save),
                 (lambda p: p == "/api/reload", lambda p, q: self._json(app.reload())),

@@ -7,7 +7,7 @@ from pypdf import PdfReader
 
 from ocrpdf import cli, editor
 from ocrpdf.editor import rendering, server
-from ocrpdf.editor.session import EditSession
+from ocrpdf.editor.session import SPLIT_MARK, EditSession
 from ocrpdf.model import Block, Document, Source, Span
 from synth import benjamin_like_page, make_pdf
 
@@ -61,6 +61,18 @@ def test_page_post_and_justify(api):
     assert ok.json() == {"ok": True}
     assert isinstance(c.post("/api/justify-all", json={}).json()["changed"], int)
 
+
+def test_split_block(api):
+    s, c = api()
+    text = s.page_text(0).replace("do texto", SPLIT_MARK + "do texto", 1)
+    r = c.post("/api/split?n=0", json={"text": text})
+    assert r.json() == {"block": 1}
+    texts = [b["spans"][0]["text"] for b in json.loads(c.get("/api/page", params={"n": 0}).json()["text"])]
+    assert texts == ["Parágrafo 0", "do texto.", "Parágrafo 1 do texto."]
+    assert c.get("/api/state").json()["dirty"] is True
+    bad = c.post("/api/split?n=0", json={"text": s.page_text(0)})
+    assert bad.status_code == 400 and "cursor" in bad.json()["error"]
+    assert c.post("/api/split?n=0", json={}).status_code == 400
 
 def test_save_flow(api, tmp_path):
     s, c = api()

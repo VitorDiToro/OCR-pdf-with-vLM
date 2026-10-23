@@ -9,6 +9,7 @@ const KIND_NAMES = {
 };
 // tipos em que o render aplica alinhamento e negrito/itálico do bloco (render/html.py)
 const TEXT_KINDS = ['paragraph', 'list_item', 'caption', 'title', 'heading'];
+const SPLIT_MARK = '\ue000';   // ponto de divisão enviado ao servidor (a mesma marca da sessão)
 
 /**
  * Intervalos [início, fim) de cada objeto de 1º nível do array JSON do texto.
@@ -550,7 +551,7 @@ function renderBlockBar() {
   const { data, error } = S.info;
   const n = S.cur;
   const b = data && n >= 0 ? data[n] : null;
-  const actions = [ui.bBold, ui.bItalic, ui.bJustify, ui.bBreak, ui.bLess, ui.bMore, ui.bHide];
+  const actions = [ui.bBold, ui.bItalic, ui.bJustify, ui.bBreak, ui.bLess, ui.bMore, ui.bSplit, ui.bHide];
   const label = ui.blockLabel;
   label.className = 'block-label';
   if (!b) {
@@ -585,7 +586,7 @@ function renderBlockBar() {
     label.appendChild(warn);
   }
   for (const el of actions) el.disabled = false;
-  ui.bBold.disabled = ui.bItalic.disabled = !textual;
+  ui.bBold.disabled = ui.bItalic.disabled = ui.bSplit.disabled = !textual;
   ui.bBold.setAttribute('aria-pressed', String(textual && isBold(b)));
   ui.bItalic.setAttribute('aria-pressed', String(textual && isItalic(b)));
   ui.bJustify.disabled = !textual || isJustified(b);
@@ -646,8 +647,14 @@ function renderBoxes() {
   if (!S.hasOriginal || S.page === null) return;
   const data = S.info.data;
   const frag = document.createDocumentFragment();
+  let last = null;   // caixa anterior: blocos divididos têm a mesma caixa e ganham um rótulo só
   S.blocks.forEach((row, k) => {
     if (!row.box) return;
+    if (last && String(last.box) === String(row.box)) {
+      last.num.textContent = `${last.first + 1}–${k + 1}`;
+      if (k === S.cur) last.el.classList.add('cur');
+      return;
+    }
     const [x1, y1, x2, y2] = row.box;
     const hidden = data && data[k] ? isHidden(data[k]) : row.hidden;
     const d = document.createElement('div');
@@ -664,6 +671,7 @@ function renderBoxes() {
     d.addEventListener('mousedown', (e) => e.preventDefault());   // não tira o foco do textarea
     d.addEventListener('click', () => moveToBlock(k));
     frag.appendChild(d);
+    last = { box: row.box, el: d, num, first: k };
   });
   ui.origBoxes.replaceChildren(frag);
 }
@@ -857,6 +865,29 @@ async function justifyAll() {
   });
 }
 
+/** Divide o bloco do cursor em dois (no servidor, como o Justificar todos); o cursor vai ao bloco novo. */
+async function splitBlock() {
+  const ta = ui.ta;
+  const at = ta.selectionStart;
+  const text = ta.value.slice(0, at) + SPLIT_MARK + ta.value.slice(at);
+  let inText = false;
+  try {
+    inText = JSON.parse(text).some((b) => b && TEXT_KINDS.includes(b.kind) && Array.isArray(b.spans)
+      && b.spans.some((s) => s && typeof s.text === 'string' && s.text.includes(SPLIT_MARK)));
+  } catch (e) { inText = false; }
+  if (!inText) {
+    showMessage('Para dividir, ponha o cursor dentro do texto ("text") do bloco, no ponto da divisão.', 'error');
+    return;
+  }
+  await run('dividindo…', async () => {
+    const r = await api('POST', `/api/split?n=${S.page}`, { text });
+    S.sessionDirty = true;
+    await loadPage(S.i, true, ta.value);
+    moveToBlock(r.block);
+    showMessage(`Bloco ${r.block} dividido em ${r.block} e ${r.block + 1}; falta salvar.`, 'ok');
+  });
+}
+
 /**
  * Saída do conflito (o document.json mudou no disco): o servidor relê o arquivo e descarta a memória.
  * O texto e o formato da tela ficam como estão, "não salvos"; o próximo Salvar os grava sobre o arquivo novo.
@@ -962,7 +993,7 @@ function bind() {
     fmtPage: $('fmt-page'), fmtMargin: $('fmt-margin'), fmtBody: $('fmt-body'), fmtHeader: $('fmt-header'),
     blockLabel: $('block-label'), bBold: $('b-bold'), bItalic: $('b-italic'), bJustify: $('b-justify'),
     bBreak: $('b-break'), bLess: $('b-less'), bLines: $('b-lines'), bMore: $('b-more'), bSize: $('b-size'),
-    bHide: $('b-hide'),
+    bSplit: $('b-split'), bHide: $('b-hide'),
     ta: $('text'), gutter: $('gutter-lines'), mirror: $('mirror'),
     tabResult: $('tab-result'), tabOriginal: $('tab-original'),
     paneResult: $('pane-result'), paneOriginal: $('pane-original'),
@@ -992,6 +1023,7 @@ function bind() {
     [ui.bLess, 'less'], [ui.bMore, 'more'], [ui.bHide, 'hide'],
   ];
   for (const [el, action] of actions) el.addEventListener('click', () => blockAction(action));
+  ui.bSplit.addEventListener('click', splitBlock);
   // aplica no change (Enter ou saída do campo); o Enter só tira o foco, e o blur dispara o change
   ui.bSize.addEventListener('change', applySize);
   ui.bSize.addEventListener('keydown', (e) => {

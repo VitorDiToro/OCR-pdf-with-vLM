@@ -3,8 +3,8 @@ import os
 
 import pytest
 
-from ocrpdf.editor.session import ConflictError, EditError, EditSession, output_scale
-from ocrpdf.model import Block, BlockStyle, Document, OutputFormat, Source, Span
+from ocrpdf.editor.session import SPLIT_MARK, ConflictError, EditError, EditSession, output_scale
+from ocrpdf.model import Block, BlockStyle, Document, OutputFormat, Rule, Source, Span
 
 
 def _block(text: str, page: int, kind: str = "paragraph", **style) -> Block:
@@ -218,3 +218,96 @@ def test_invalid_saved_format_is_refused_on_open_and_reload(tmp_path, output):
     assert s.doc.output is None                    # a sessão anterior fica
     with pytest.raises(EditError, match=r"formato gravado \(output\) inválido"):
         EditSession(path)
+
+
+# --- dividir bloco ----------------------------------------------------------------------------
+
+def _cover(tmp_path) -> tuple[EditSession, object]:
+    """Capa: um título com filetes, quebra, espaço e nota sem chamada; e um parágrafo."""
+    rule = Rule(1.0, 2.0, 0.0, 1.0)
+    title = Block(
+        kind="title", level=1,
+        spans=[Span("CONTRIBUIÇÃO À CRÍTICA DA ECONOMIA POLÍTICA "), Span("Tradução", italic=True)],
+        style=BlockStyle(align="center", font_size_pt=20.0, page_break_before=True, space_before_lines=2,
+                         rule_above=rule, rule_below=rule),
+        trailing_notes=["n1"], source=Source(page=0, bbox=(1, 2, 3, 4)),
+    )
+    doc = Document(blocks=[title, _block("texto", 0), _block("outra página", 1)])
+    path = tmp_path / "document.json"
+    doc.save(path)
+    return EditSession(path), path
+
+
+def _marked(s: EditSession, page: int, before: str) -> str:
+    """Texto da página com a marca de divisão antes da 1ª ocorrência de `before`."""
+    text = s.page_text(page)
+    return text.replace(before, SPLIT_MARK + before, 1)
+
+
+def test_split_block_at_the_mark(tmp_path):
+    s, path = _cover(tmp_path)
+    disk = path.read_bytes()
+    assert s.split_block(0, _marked(s, 0, "DA ECONOMIA")) == 1
+    a, b = s.doc.blocks[0], s.doc.blocks[1]
+    assert a.spans == [Span("CONTRIBUIÇÃO À CRÍTICA")]
+    assert b.spans == [Span("DA ECONOMIA POLÍTICA "), Span("Tradução", italic=True)]
+    assert (a.kind, b.kind, a.level, b.level) == ("title", "title", 1, 1)
+    assert a.source == b.source == Source(page=0, bbox=(1, 2, 3, 4))
+    # o que vem "antes" fica no 1º; o que vem "depois", no 2º; o resto do estilo vale para os dois
+    assert (a.style.page_break_before, a.style.space_before_lines) == (True, 2)
+    assert (b.style.page_break_before, b.style.space_before_lines) == (False, 0)
+    assert a.style.rule_above and not a.style.rule_below
+    assert b.style.rule_below and not b.style.rule_above
+    assert a.style.font_size_pt == b.style.font_size_pt == 20.0 and b.style.align == "center"
+    assert (a.trailing_notes, b.trailing_notes) == ([], ["n1"])
+    assert len(s.doc.blocks) == 4 and s.page_indices(0) == [0, 1, 2]
+    assert s.dirty and path.read_bytes() == disk
+
+
+def test_split_at_a_span_boundary_and_with_other_edits(tmp_path):
+    s, _ = _cover(tmp_path)
+    text = _marked(s, 0, "Tradução").replace('"texto"', '"texto editado"')
+    assert s.split_block(0, text) == 1
+    assert s.doc.blocks[0].spans == [Span("CONTRIBUIÇÃO À CRÍTICA DA ECONOMIA POLÍTICA")]
+    assert s.doc.blocks[1].spans == [Span("Tradução", italic=True)]
+    assert s.doc.blocks[2].spans == [Span("texto editado")]   # o resto da página também é aplicado
+
+
+def test_split_then_save_and_reopen(tmp_path):
+    s, path = _cover(tmp_path)
+    s.split_block(0, _marked(s, 0, "DA ECONOMIA"))
+    s.save()
+    again = EditSession(path)
+    assert [b.plain_text() for b in again.doc.blocks][:2] == ["CONTRIBUIÇÃO À CRÍTICA", "DA ECONOMIA POLÍTICA Tradução"]
+    assert len(json.loads(again.page_text(0))) == 3
+
+
+@pytest.mark.parametrize("make_text, message", [
+    (lambda t: t, "cursor"),                                                     # sem marca
+    (lambda t: t.replace("DA", SPLIT_MARK + "DA").replace("texto", SPLIT_MARK + "texto"), "uma vez"),
+    (lambda t: t.replace("CONTRIBUIÇÃO", SPLIT_MARK + "CONTRIBUIÇÃO"), "começo ou no fim"),
+    (lambda t: t.replace("Tradução", "Tradução" + SPLIT_MARK), "começo ou no fim"),
+    (lambda t: t.replace("[", "[" + SPLIT_MARK, 1), "JSON"),                     # fora de uma string
+])
+def test_split_refused_leaves_the_session_as_it_was(tmp_path, make_text, message):
+    s, _ = _cover(tmp_path)
+    before = [b.plain_text() for b in s.doc.blocks]
+    with pytest.raises(EditError, match=message):
+        s.split_block(0, make_text(s.page_text(0)))
+    assert [b.plain_text() for b in s.doc.blocks] == before and not s.dirty
+
+
+def test_split_refuses_inside_a_formula_or_a_note_call(tmp_path):
+    s, _ = _cover(tmp_path)
+    s.doc.blocks[1].spans = [Span("antes "), Span("x+y", math=True), Span("12", sup=True, note="n1"), Span(" depois")]
+    for target in ("+y", '2"'):
+        with pytest.raises(EditError, match="fórmula|chamada"):
+            s.split_block(0, _marked(s, 0, target))
+    assert len(s.doc.blocks) == 3
+
+
+def test_split_only_text_blocks(tmp_path):
+    s, _ = _cover(tmp_path)
+    s.doc.blocks[1] = Block(kind="table", spans=[Span("célula")], source=Source(page=0))
+    with pytest.raises(EditError, match="texto"):
+        s.split_block(0, _marked(s, 0, "lula"))
