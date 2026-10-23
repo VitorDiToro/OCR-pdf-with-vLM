@@ -9,7 +9,7 @@ from dataclasses import replace
 from ocrpdf.model import Block, BlockStyle, Span
 
 EDITABLE_STYLE = (
-    "align", "indent_em", "font_size_pt", "page_break_before",
+    "align", "indent_em", "block_indent_em", "font_size_pt", "page_break_before",
     "space_before_lines", "hidden", "bold", "italic",
 )
 _MARKS = ("italic", "bold", "sup", "sub", "math")
@@ -94,6 +94,9 @@ def _style(base: BlockStyle, d: object) -> BlockStyle:
     if not _is_num(v["indent_em"]):
         raise ValueError("indent_em deve ser um número finito")
     v["indent_em"] = float(v["indent_em"])
+    if not _is_num(v["block_indent_em"]) or v["block_indent_em"] < 0:
+        raise ValueError("block_indent_em deve ser um número não negativo")
+    v["block_indent_em"] = float(v["block_indent_em"])
     fs = v["font_size_pt"]
     if fs is not None:
         if not _is_num(fs) or fs <= 0:

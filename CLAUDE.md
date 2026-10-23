@@ -84,7 +84,9 @@ A faixa de formato edita `document.output`. O original vem de `--pdf` ou de `doc
 inexistente ou inválido, inclusive o `output` gravado, porta ocupada) saem como `ocrpdf: erro: …`, código 1.
 `convert`/`analyze` remontam o JSON a partir do cache e apagam as edições (sem proteção, decisão do
 usuário). Campos editáveis à mão: por bloco, `style.align` (justify|left|center|right),
-`style.indent_em`, `style.font_size_pt` (escala medida), `style.page_break_before`,
+`style.indent_em` (1ª linha; só left/justify), `style.block_indent_em` (bloco inteiro, do lado do
+alinhamento: left/justify à esquerda, right à direita, center nenhum; em do bloco; o OCR não preenche),
+`style.font_size_pt` (escala medida), `style.page_break_before`,
 `style.space_before_lines` (linhas do corpo), `style.hidden`, `style.bold`/`style.italic`
 (sobrescrevem o bloco todo; `false` tira também a marca dos trechos; `null` = padrão do tipo); por
 trecho (`spans`), `text` (`\n` no texto = quebra de linha no PDF; o OCR nunca o gera), `italic`, `bold`.
@@ -149,7 +151,7 @@ scripts/          serve_vllm.sh (um servidor; GPU_MEM pela VRAM livre; MAX_IMAGE
 - `Block.kind`: title | heading | paragraph | list_item | caption | table | formula | figure | endnote.
   `endnote` é um marcador de posição (`note=id`); o conteúdo fica em `doc.notes`.
   `trailing_notes`: notas de rodapé sem chamada, ancoradas no último bloco da página de origem.
-- `BlockStyle`: align, indent_em, font_size_pt, full_width, rule_above/rule_below (`Rule`:
+- `BlockStyle`: align, indent_em, block_indent_em, font_size_pt, full_width, rule_above/rule_below (`Rule`:
   thickness_pt, gap_pt, left_em no em do corpo, right_frac relativo à área de texto),
   hidden (o render pula o bloco; a quebra de página dele passa para o próximo bloco visível),
   space_before_lines (linhas do corpo antes do bloco; num bloco de coluna, dentro do `div.cols`), bold/italic

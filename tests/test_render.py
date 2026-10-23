@@ -308,3 +308,27 @@ def test_newline_in_a_span_breaks_the_line() -> None:
                            Span("Tradução e\nIntrodução", italic=True)]
     html = _body_html(doc)
     assert "CONTRIBUIÇÃO À CRÍTICA<br>DA ECONOMIA POLÍTICA<br><i>Tradução e<br>Introdução</i>" in html
+
+
+@pytest.mark.parametrize("align, css", [
+    ("left", "margin-left:2.5em"), ("justify", "margin-left:2.5em"), ("right", "margin-right:2.5em"), ("center", None),
+])
+def test_block_indent_on_the_side_of_the_alignment(align: str, css: str | None) -> None:
+    doc = _two_parts(1, None)
+    doc.blocks[3].style.align = align
+    doc.blocks[3].style.block_indent_em = 2.5
+    p = _body_html(doc).split("Texto curto da segunda")[0].rsplit("<p", 1)[1]
+    assert "margin-" not in p if css is None else css in p
+
+
+@pytest.mark.parametrize("align, sign", [("left", 1), ("right", -1)])
+def test_block_indent_moves_the_whole_block(tmp_path: Path, align: str, sign: int) -> None:
+    def x(indent: float) -> float:
+        doc = _two_parts(1, None)
+        doc.blocks[3].style.align = align
+        doc.blocks[3].style.block_indent_em = indent
+        out = tmp_path / f"out{indent}.pdf"
+        render.render_pdf(doc, out, base_dir=tmp_path)
+        return next(x for t, x, _ in _text_positions(out) if "da segunda" in t)
+
+    assert (x(3) - x(0)) * sign == pytest.approx(3 * 10, abs=1)

@@ -189,6 +189,9 @@ class _HtmlRenderer:
             css.append(f"text-align:{st.align}")
         if st.indent_em and st.align in ("justify", "left"):
             css.append(f"text-indent:{st.indent_em:g}em")
+        if st.block_indent_em and st.align != "center":
+            side = "right" if st.align == "right" else "left"   # margin: o padding-left do p.li fica
+            css.append(f"margin-{side}:{st.block_indent_em:g}em")
         if st.font_size_pt:
             css.append(f"font-size:{st.font_size_pt:g}pt")
         if b.kind in _TEXT_KINDS:

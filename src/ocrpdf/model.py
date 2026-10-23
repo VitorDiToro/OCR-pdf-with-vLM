@@ -41,6 +41,7 @@ class Rule:
 class BlockStyle:
     align: str = "justify"            # justify | left | center | right
     indent_em: float = 0.0            # recuo da primeira linha
+    block_indent_em: float = 0.0      # recuo do bloco inteiro, do lado do alinhamento (center: nenhum)
     font_size_pt: float | None = None
     full_width: bool = True           # False: bloco pertence a uma coluna
     rule_above: Rule | None = None    # filete colado acima do bloco

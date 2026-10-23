@@ -24,7 +24,7 @@ def test_roundtrip_keeps_everything():
         note="n9",
         trailing_notes=["n2", "n3"],
         style=BlockStyle(
-            align="center", indent_em=1.5, font_size_pt=12.0, full_width=False,
+            align="center", indent_em=1.5, block_indent_em=2.0, font_size_pt=12.0, full_width=False,
             rule_below=Rule(0.5, 3.0, 1.0, 0.25), page_break_before=True,
             space_before_lines=2, hidden=True, bold=True, italic=False,
         ),
@@ -54,6 +54,9 @@ def test_missing_field_means_default():
     ({"kind": "paragraph", "style": {"font_size_pt": -3}}, "font_size_pt"),
     ({"kind": "paragraph", "style": {"font_size_pt": float("inf")}}, "font_size_pt"),
     ({"kind": "paragraph", "style": {"indent_em": float("nan")}}, "indent_em"),
+    ({"kind": "paragraph", "style": {"block_indent_em": -1}}, "block_indent_em"),
+    ({"kind": "paragraph", "style": {"block_indent_em": "2"}}, "block_indent_em"),
+    ({"kind": "paragraph", "style": {"block_indent_em": True}}, "block_indent_em"),
     ({"kind": "paragraph", "style": {"space_before_lines": -1}}, "space_before_lines"),
     ({"kind": "paragraph", "style": {"hidden": "sim"}}, "hidden"),
     ({"kind": "paragraph", "spans": [{"italic": True}]}, "text"),
