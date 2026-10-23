@@ -411,3 +411,23 @@ def test_table_font_size_and_cell_alignment_in_the_pdf(tmp_path: Path) -> None:
     assert _font_sizes(out)["CDD"] == pytest.approx(6.0, abs=0.1)
     x = {t.strip(): x for t, x, _ in _text_positions(out) if t.strip()}
     assert x["CDD"] > x["Marx, Karl, 1818-1883, Contribuição à crítica"] + 50
+
+
+
+def test_negative_space_brings_the_blocks_closer(tmp_path: Path) -> None:
+    def second_y(field: str, lines: float) -> float:
+        doc = _two_parts(1, None)
+        setattr(doc.blocks[3 if field == "before" else 2].style, f"space_{field}_lines", lines)
+        out = tmp_path / f"{field}{lines}.pdf"
+        render.render_pdf(doc, out, base_dir=tmp_path)
+        return next(y for t, _, y in _text_positions(out) if "da segunda" in t)
+
+    for field in ("before", "after"):
+        assert second_y(field, -0.5) - second_y(field, 0) == pytest.approx(0.5 * 1.2 * 10, abs=0.5)
+
+
+def test_negative_space_is_a_negative_margin() -> None:
+    doc = _two_parts(1, None)
+    doc.blocks[1].style.space_after_lines = -1
+    doc.blocks[2].style.space_before_lines = 0.5          # somam: -0,5 linha
+    assert '<div class="space" style="margin-top:-6pt"></div>' in _body_html(doc)

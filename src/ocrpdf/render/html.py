@@ -75,14 +75,16 @@ class _HtmlRenderer:
                 after = 0.0    # a quebra já separa: o espaço cairia no fim da página
             page_break, shown = False, True
             lines, after = block.style.space_before_lines + after, block.style.space_after_lines
-            if lines > 0:
+            if lines:
                 # bloco de coluna no meio do grupo: o espaço fica dentro do div.cols (fechá-lo rebalancearia
                 # as colunas); no início do grupo, fora dele (dentro, empurraria só a 1ª coluna)
                 if group and not cols:
                     body.append(self._columns(group))
                     group = []
                 height = lines * self.doc.line_height * self.doc.body_font_pt
-                (group if cols and group else body).append(f'<div class="space" style="height:{height:g}pt"></div>')
+                # negativo: margem que se soma ao espaço que já havia (as margens se juntam pelo div vazio)
+                css = f"height:{height:g}pt" if height > 0 else f"margin-top:{height:g}pt"
+                (group if cols and group else body).append(f'<div class="space" style="{css}"></div>')
             if cols:
                 group.append(html)
                 continue

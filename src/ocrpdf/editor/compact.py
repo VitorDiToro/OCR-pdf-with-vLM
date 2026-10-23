@@ -113,8 +113,8 @@ def _style(base: BlockStyle, d: object) -> BlockStyle:
         v["font_size_pt"] = float(fs)
     for f in ("space_before_lines", "space_after_lines"):
         n = v[f]
-        if not _is_num(n) or n < 0:
-            raise ValueError(f"{f} deve ser um número não negativo (linhas; aceita fração)")
+        if not _is_num(n):
+            raise ValueError(f"{f} deve ser um número (linhas; aceita fração; negativo aproxima)")
         v[f] = int(n) if float(n).is_integer() else float(n)   # 1.0 vale 1: o JSON continua com inteiros
     if v["table_borders"] not in _BORDERS:
         raise ValueError(f"table_borders deve ser um de {', '.join(_BORDERS)}")

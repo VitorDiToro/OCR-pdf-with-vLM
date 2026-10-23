@@ -57,7 +57,7 @@ def test_missing_field_means_default():
     ({"kind": "paragraph", "style": {"block_indent_em": -1}}, "block_indent_em"),
     ({"kind": "paragraph", "style": {"block_indent_em": "2"}}, "block_indent_em"),
     ({"kind": "paragraph", "style": {"block_indent_em": True}}, "block_indent_em"),
-    ({"kind": "paragraph", "style": {"space_before_lines": -1}}, "space_before_lines"),
+    ({"kind": "paragraph", "style": {"space_before_lines": "um"}}, "space_before_lines"),
     ({"kind": "paragraph", "style": {"hidden": "sim"}}, "hidden"),
     ({"kind": "paragraph", "spans": [{"italic": True}]}, "text"),
     ([1, 2], "objeto"),
@@ -73,8 +73,9 @@ def test_integer_float_space_before_lines_roundtrips_as_int():
     back = from_compact(b, data)
     assert back.style.space_before_lines == 1 and type(back.style.space_before_lines) is int
     for field in ("space_before_lines", "space_after_lines"):
-        assert getattr(from_compact(b, {"kind": "paragraph", "style": {field: 1.5}}).style, field) == 1.5
-        for bad in (-1.0, -0.5, True, "1"):
+        for ok in (1.5, -0.5, -2):                         # negativo aproxima os blocos
+            assert getattr(from_compact(b, {"kind": "paragraph", "style": {field: ok}}).style, field) == ok
+        for bad in (True, "1", None):
             with pytest.raises(ValueError, match=field):
                 from_compact(b, {"kind": "paragraph", "style": {field: bad}})
 

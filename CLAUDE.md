@@ -88,7 +88,7 @@ usuário). Campos editáveis à mão: por bloco, `style.align` (justify|left|cen
 alinhamento: left/justify à esquerda, right à direita, center nenhum; em do bloco; o OCR não preenche),
 `style.font_size_pt` (escala medida), `style.page_break_before`,
 `style.space_before_lines`/`style.space_after_lines` (linhas do corpo, aceita fração; somam ao espaço
-que o bloco já tem), `style.hidden`, `style.bold`/`style.italic`
+que o bloco já tem; negativo aproxima, e pode sobrepor), `style.hidden`, `style.bold`/`style.italic`
 (sobrescrevem o bloco todo; `false` tira também a marca dos trechos; `null` = padrão do tipo); por
 trecho (`spans`), `text` (`\n` no texto = quebra de linha no PDF; o OCR nunca o gera), `italic`, `bold`.
 Tabelas: `html` (editável no editor; ao salvar passa por `sanitize_table`; `<br>` quebra a linha;
@@ -162,7 +162,8 @@ scripts/          serve_vllm.sh (um servidor; GPU_MEM pela VRAM livre; MAX_IMAGE
   hidden (o render pula o bloco; a quebra de página dele passa para o próximo bloco visível),
   space_before_lines/space_after_lines (linhas do corpo, com fração; o "depois" soma ao "antes" do próximo
   bloco visível num `div.space` só, e some se uma quebra de página ou o fim do documento vem antes; o
-  espaço de um bloco de coluna no meio do grupo fica dentro do `div.cols`), bold/italic
+  espaço de um bloco de coluna no meio do grupo fica dentro do `div.cols`; a soma negativa vira
+  `margin-top` negativa do `div.space` vazio, que as margens vizinhas absorvem), bold/italic
   (`bool | None`, sobrescrevem o bloco inteiro), page_break_before (o render põe um `div.page-break` fora do `div.cols`, e
   nada antes do 1º bloco visível).
 - `Span`: text + italic/bold/sup/sub/math + `note` (id quando é chamada de nota).

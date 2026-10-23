@@ -214,7 +214,7 @@ function isHidden(b) { return styleOf(b).hidden === true; }
 function hasBreak(b) { return styleOf(b).page_break_before === true; }
 function linesBefore(b) {
   const n = styleOf(b).space_before_lines;
-  return typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : 0;   // aceita fração (0.5)
+  return typeof n === 'number' && Number.isFinite(n) ? n : 0;   // fração (0.5) ou negativo (aproxima)
 }
 
 /** Aplica uma ação da barra do bloco ao objeto `b` (forma compacta), no lugar. */
@@ -593,7 +593,7 @@ function renderBlockBar() {
   ui.bJustify.title = !textual ? 'só para blocos de texto' : isJustified(b) ? 'o bloco já está justificado' : '';
   ui.bBreak.setAttribute('aria-pressed', String(hasBreak(b)));
   ui.bLines.textContent = String(linesBefore(b));
-  ui.bLess.disabled = linesBefore(b) === 0;
+  ui.bLess.disabled = linesBefore(b) <= 0;   // os botões só põem/tiram linhas em branco; negativo, no JSON
   ui.bHide.textContent = hidden ? 'Mostrar bloco' : 'Ocultar bloco';
   ui.bHide.setAttribute('aria-pressed', String(hidden));
   const scale = currentScale();

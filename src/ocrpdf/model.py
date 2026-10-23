@@ -48,7 +48,7 @@ class BlockStyle:
     rule_below: Rule | None = None    # filete colado abaixo do bloco
     page_break_before: bool = False   # força quebra de página antes do bloco (edição à mão)
     hidden: bool = False              # não renderiza o bloco (as notas sem chamada dele ficam)
-    space_before_lines: float = 0     # linhas em branco antes do bloco (aceita fração)
+    space_before_lines: float = 0     # linhas em branco antes do bloco (fração; negativo aproxima)
     space_after_lines: float = 0      # linhas em branco depois do bloco, antes do próximo visível
     table_borders: str = "all"        # tabela: all (grade) | outer (só a borda de fora) | none
     bold: bool | None = None          # None: o padrão do tipo de bloco
