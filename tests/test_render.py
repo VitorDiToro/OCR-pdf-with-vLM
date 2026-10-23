@@ -6,7 +6,7 @@ import pytest
 from pypdf import PdfReader
 
 from ocrpdf import render
-from ocrpdf.model import Block, Document, Note, PageGeometry, Span
+from ocrpdf.model import Block, BlockStyle, Document, Note, PageGeometry, Span
 
 _WORDS = "texto de corpo com palavras de tamanho variado para encher linhas inteiras".split()
 
@@ -374,3 +374,40 @@ def test_space_after_a_column_block_before_a_full_width_one_stays_outside_the_co
     doc.blocks[1].style.space_after_lines = 1
     html = _body_html(doc)
     assert html.index("primeira parte.") < html.index("</div>") < html.index('class="space"') < html.index("Segunda")
+
+
+
+def _table_doc(html: str, **style) -> Document:
+    doc = _two_parts(1, None)
+    doc.blocks.insert(2, Block(kind="table", html=html, style=BlockStyle(**style)))
+    return doc
+
+
+def test_table_takes_the_font_size_and_the_borders_of_its_style() -> None:
+    html = "<table><tr><td>a</td></tr></table>"
+    assert '<div class="table"><table>' in _body_html(_table_doc(html))      # padrão: como antes
+    out = _body_html(_table_doc(html, font_size_pt=6.0, table_borders="outer"))
+    assert '<div class="table sized borders-outer" style="font-size:6pt"><table>' in out
+    css = render.render_html(_table_doc(html))
+    assert ".table.sized table" in css and ".table.borders-outer table" in css
+
+
+def _font_sizes(pdf: Path) -> dict[str, float]:
+    sizes = {}
+
+    def visitor(text, cm, tm, font_dict, font_size):
+        if text.strip():
+            sizes[text.strip()] = abs(font_size * tm[3] * cm[3])
+
+    PdfReader(pdf).pages[0].extract_text(visitor_text=visitor)
+    return sizes
+
+
+def test_table_font_size_and_cell_alignment_in_the_pdf(tmp_path: Path) -> None:
+    html = ('<table><tr><td>Marx, Karl, 1818-1883, Contribuição à crítica</td></tr>'
+            '<tr><td align="right">CDD</td></tr></table>')
+    out = tmp_path / "t.pdf"
+    render.render_pdf(_table_doc(html, font_size_pt=6.0), out, base_dir=tmp_path)
+    assert _font_sizes(out)["CDD"] == pytest.approx(6.0, abs=0.1)
+    x = {t.strip(): x for t, x, _ in _text_positions(out) if t.strip()}
+    assert x["CDD"] > x["Marx, Karl, 1818-1883, Contribuição à crítica"] + 50

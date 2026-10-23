@@ -64,7 +64,7 @@ booleano); `output` gravado inválido sai como `ocrpdf: erro: …`. `convert`, `
 Edição do `document.json`: `ocrpdf edit <work>/document.json -o final.pdf [--pdf original.pdf]
 [--port N] [--no-browser]` abre um editor local no navegador (só 127.0.0.1, sem CDN). Navega pela
 página do original (`source.page`); à esquerda, o JSON compacto dos blocos da página (só texto,
-marcas ligadas e `style` fora do padrão; mesmo número e `kind` de blocos ao salvar, remover =
+marcas ligadas, `style` fora do padrão e o `html` das tabelas; mesmo número e `kind` de blocos ao salvar, remover =
 ocultar, criar = Dividir no cursor); à direita, abas Resultado e Original (escaneado, blocos numerados). Botões: Salvar
 (atômico; cria `<nome>.orig.json` uma vez; se o arquivo mudou no disco ou sumiu, recusa com 409 e a
 página oferece **Recarregar do disco**: `POST /api/reload` relê o arquivo e descarta a memória, e a
@@ -91,6 +91,10 @@ alinhamento: left/justify à esquerda, right à direita, center nenhum; em do bl
 que o bloco já tem), `style.hidden`, `style.bold`/`style.italic`
 (sobrescrevem o bloco todo; `false` tira também a marca dos trechos; `null` = padrão do tipo); por
 trecho (`spans`), `text` (`\n` no texto = quebra de linha no PDF; o OCR nunca o gera), `italic`, `bold`.
+Tabelas: `html` (editável no editor; ao salvar passa por `sanitize_table`; `<br>` quebra a linha;
+`align="left|center|right|justify"` em `td`/`th`/`tr`/`p`/`caption`), `style.font_size_pt` (vale o
+tamanho exato; sem ele, 0,92 do corpo), `style.table_borders` (`all` grade | `outer` só a borda de fora |
+`none`).
 NaN/Infinity são recusados (não são JSON).
 A família da fonte é só do documento (`font_family`). `source.page` é 0-based.
 
@@ -124,7 +128,8 @@ src/ocrpdf/
                   sem chamada), ENDNOTE_HEADINGS (Notas, Referências, Bibliografia...).
   assemble.py     PageLayout[] → Document: margens, tipografia, nº de colunas, cabeçalho corrente,
                   blocos, junção de parágrafos entre páginas/colunas, notas, níveis de título.
-  htmlsafe.py     sanitiza HTML de tabelas (só tags de tabela + colspan/rowspan).
+  htmlsafe.py     sanitiza HTML de tabelas, do OCR ou do editor (só tags de tabela + colspan/rowspan
+                  e align).
   model.py        Document/Block/Span/Note/BlockStyle/Rule/Source/PageGeometry + save/load tolerante.
   editor/         `ocrpdf edit`: compact (bloco ↔ forma compacta), session (EditSession: páginas,
                   salvar com validação/backup/conflito de mtime, sem HTTP), rendering (página
@@ -299,7 +304,7 @@ Feito e conferido:
   `source_path`; o do Marx também `output` (14.4x21.6, margem 2, corpo 12.4, cabeçalho ligado):
   `render` sem opções dá 11 páginas de 408,19 × 612,28 pt.
 
-Ainda não exercitado: ziamath inline, colunas, tabelas, figuras, presets `qwen25vl`/`qwen3vl`.
+Ainda não exercitado: ziamath inline, colunas, tabelas além das fichas catalográficas, figuras, presets `qwen25vl`/`qwen3vl`.
 
 ## Próximos passos
 

@@ -146,7 +146,11 @@ class _HtmlRenderer:
         elif b.kind == "caption":
             inner = f'<p class="caption"{style}>{self._text(b, size)}</p>'
         elif b.kind == "table":
-            inner = f'<div class="table">{b.html}</div>'
+            st = b.style
+            cls = "table" + (" sized" if st.font_size_pt else "") + (
+                f" borders-{st.table_borders}" if st.table_borders != "all" else "")
+            size = f' style="font-size:{st.font_size_pt:g}pt"' if st.font_size_pt else ""
+            inner = f'<div class="{cls}"{size}>{b.html}</div>'
         elif b.kind == "formula":
             inner = f'<div class="formula">{math_img(b.latex, round(self.doc.body_font_pt * 1.1, 1), False)}</div>'
         elif b.kind == "figure":

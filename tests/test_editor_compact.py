@@ -77,3 +77,31 @@ def test_integer_float_space_before_lines_roundtrips_as_int():
         for bad in (-1.0, -0.5, True, "1"):
             with pytest.raises(ValueError, match=field):
                 from_compact(b, {"kind": "paragraph", "style": {field: bad}})
+
+
+
+def _table(**style) -> Block:
+    return Block(kind="table", html="<table><tr><td>M392c</td><td>Marx, Karl</td></tr></table>",
+                 style=BlockStyle(**style))
+
+
+def test_table_html_is_editable_and_sanitized():
+    b = _table()
+    c = to_compact(b)
+    assert c == {"kind": "table", "html": b.html}
+    assert from_compact(b, c) == b
+    c["html"] = '<table><tr><td>M392c</td><td align="right">Marx,<br>Karl<script>x</script></td></tr></table>'
+    assert from_compact(b, c).html == '<table><tr><td>M392c</td><td align="right">Marx,<br>Karlx</td></tr></table>'
+    for bad in ("só texto", 3, None):
+        with pytest.raises(ValueError, match="html"):
+            from_compact(b, {"kind": "table", "html": bad})
+    with pytest.raises(ValueError, match="campo desconhecido: html"):
+        from_compact(_para(), {"kind": "paragraph", "html": "<table></table>"})
+
+
+def test_table_borders():
+    b = _table(table_borders="outer")
+    assert to_compact(b)["style"] == {"table_borders": "outer"}
+    assert from_compact(b, to_compact(b)) == b
+    with pytest.raises(ValueError, match="table_borders"):
+        from_compact(b, {"kind": "table", "html": b.html, "style": {"table_borders": "dupla"}})

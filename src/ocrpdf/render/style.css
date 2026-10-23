@@ -86,6 +86,13 @@ code.math-src { font-family: "Liberation Mono", monospace; font-size: 0.9em; }
 .table table { border-collapse: collapse; margin: 0 auto; font-size: 0.92em; line-height: 1.25; }
 .table th, .table td { border: 0.5pt solid #444; padding: 2pt 4pt; vertical-align: top; text-align: left; }
 .table th { font-weight: bold; }
+.table.sized table { font-size: 1em; }   /* font_size_pt do style: o tamanho exato, sem o 0.92 */
+.table.borders-outer th, .table.borders-outer td, .table.borders-none th, .table.borders-none td { border: none; }
+.table.borders-outer table { border: 0.5pt solid #444; }
+.table [align="left"], .table [align="left"] > td, .table [align="left"] > th { text-align: left; }
+.table [align="center"], .table [align="center"] > td, .table [align="center"] > th { text-align: center; }
+.table [align="right"], .table [align="right"] > td, .table [align="right"] > th { text-align: right; }
+.table [align="justify"], .table [align="justify"] > td, .table [align="justify"] > th { text-align: justify; }
 
 /* "page_break_before": true no style de um bloco do document.json (edição à mão) */
 .page-break { break-before: page; }

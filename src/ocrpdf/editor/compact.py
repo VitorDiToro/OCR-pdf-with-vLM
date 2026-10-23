@@ -6,14 +6,16 @@ import math
 from copy import deepcopy
 from dataclasses import replace
 
+from ocrpdf.htmlsafe import sanitize_table
 from ocrpdf.model import Block, BlockStyle, Span
 
 EDITABLE_STYLE = (
     "align", "indent_em", "block_indent_em", "font_size_pt", "page_break_before",
-    "space_before_lines", "space_after_lines", "hidden", "bold", "italic",
+    "space_before_lines", "space_after_lines", "hidden", "bold", "italic", "table_borders",
 )
 _MARKS = ("italic", "bold", "sup", "sub", "math")
 _ALIGNS = ("justify", "left", "center", "right")
+_BORDERS = ("all", "outer", "none")
 _DEFAULTS = BlockStyle()
 
 
@@ -30,6 +32,8 @@ def to_compact(b: Block) -> dict:
         spans.append(d)
     if spans:
         out["spans"] = spans
+    if b.kind == "table":
+        out["html"] = b.html
     style = {
         f: getattr(b.style, f) for f in EDITABLE_STYLE
         if getattr(b.style, f) != getattr(_DEFAULTS, f)
@@ -43,13 +47,18 @@ def from_compact(original: Block, data: object) -> Block:
     """Reconstrói o bloco completo a partir da forma compacta; ValueError se inválida."""
     if not isinstance(data, dict):
         raise ValueError("o bloco deve ser um objeto JSON")
-    _only(data, ("kind", "spans", "style"))
+    _only(data, ("kind", "spans", "style") + (("html",) if original.kind == "table" else ()))
     if data.get("kind") != original.kind:
         raise ValueError(f"não é permitido mudar o tipo do bloco ({original.kind!r})")
     spans = [_span(s) for s in _list(data.get("spans", []), "spans")]
     style = _style(original.style, data.get("style", {}))
-    new = deepcopy(original)
-    return replace(new, spans=spans, style=style)
+    new = replace(deepcopy(original), spans=spans, style=style)
+    if "html" in data and data["html"] != original.html:   # sem mudança, fica como estava
+        html = data["html"]
+        if not isinstance(html, str) or not (clean := sanitize_table(html)):
+            raise ValueError("html deve conter uma tabela (<table>…); para tirar a tabela, use Ocultar")
+        new.html = clean
+    return new
 
 
 def _only(d: dict, allowed: tuple[str, ...]) -> None:
@@ -107,6 +116,8 @@ def _style(base: BlockStyle, d: object) -> BlockStyle:
         if not _is_num(n) or n < 0:
             raise ValueError(f"{f} deve ser um número não negativo (linhas; aceita fração)")
         v[f] = int(n) if float(n).is_integer() else float(n)   # 1.0 vale 1: o JSON continua com inteiros
+    if v["table_borders"] not in _BORDERS:
+        raise ValueError(f"table_borders deve ser um de {', '.join(_BORDERS)}")
     for f in ("page_break_before", "hidden"):
         if not isinstance(v[f], bool):
             raise ValueError(f"{f} deve ser true ou false")

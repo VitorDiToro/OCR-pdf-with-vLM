@@ -1,4 +1,4 @@
-"""Sanitização do HTML de tabelas devolvido pelo modelo (só tags/atributos de tabela)."""
+"""Sanitização do HTML de tabelas, do modelo ou editado à mão (só tags/atributos de tabela)."""
 
 from __future__ import annotations
 
@@ -11,6 +11,8 @@ _ALLOWED = {
 }
 _VOID = {"br", "col"}
 _ATTRS = {"colspan", "rowspan"}
+_ALIGNED = {"tr", "th", "td", "p", "caption"}    # align="…" (editado à mão; o CSS o aplica)
+_ALIGNS = {"left", "center", "right", "justify"}
 
 
 class _Sanitizer(HTMLParser):
@@ -25,6 +27,9 @@ class _Sanitizer(HTMLParser):
         kept = "".join(
             f' {k}="{escape(v)}"' for k, v in attrs if k in _ATTRS and v and v.isdigit()
         )
+        align = next((v.lower() for k, v in attrs if k == "align" and v and v.lower() in _ALIGNS), None)
+        if align and tag in _ALIGNED:
+            kept += f' align="{align}"'
         self.out.append(f"<{tag}{kept}>")
         if tag not in _VOID:
             self.stack.append(tag)
