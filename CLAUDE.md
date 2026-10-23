@@ -83,7 +83,8 @@ usuário). Campos editáveis à mão: por bloco, `style.align` (justify|left|cen
 `style.indent_em`, `style.font_size_pt` (escala medida), `style.page_break_before`,
 `style.space_before_lines` (linhas do corpo), `style.hidden`, `style.bold`/`style.italic`
 (sobrescrevem o bloco todo; `false` tira também a marca dos trechos; `null` = padrão do tipo); por
-trecho (`spans`), `text`, `italic`, `bold`. NaN/Infinity são recusados (não são JSON).
+trecho (`spans`), `text` (`\n` no texto = quebra de linha no PDF; o OCR nunca o gera), `italic`, `bold`.
+NaN/Infinity são recusados (não são JSON).
 A família da fonte é só do documento (`font_family`). `source.page` é 0-based.
 
 Pasta de trabalho (padrão `<saída>_work/`): `pages/page_NNNN.json` (por página: OCR em cache +

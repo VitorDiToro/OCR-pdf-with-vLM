@@ -299,3 +299,12 @@ def test_space_before_the_first_column_block_stays_outside_the_columns() -> None
     html = _body_html(doc)
     assert html.count('class="cols"') == 1
     assert html.index("Título") < html.index('class="space"') < html.index('class="cols"')
+
+
+def test_newline_in_a_span_breaks_the_line() -> None:
+    # o OCR nunca deixa "\n" nos trechos (inline.parse troca quebras por espaço): só o usuário o escreve
+    doc = _two_parts(1, None)
+    doc.blocks[1].spans = [Span("CONTRIBUIÇÃO À CRÍTICA\nDA ECONOMIA POLÍTICA\n"),
+                           Span("Tradução e\nIntrodução", italic=True)]
+    html = _body_html(doc)
+    assert "CONTRIBUIÇÃO À CRÍTICA<br>DA ECONOMIA POLÍTICA<br><i>Tradução e<br>Introdução</i>" in html

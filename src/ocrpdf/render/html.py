@@ -217,7 +217,7 @@ class _HtmlRenderer:
             if s.math:
                 out.append(math_img(s.text, size_pt, True))
                 continue
-            text = escape(s.text, quote=False)
+            text = escape(s.text, quote=False).replace("\n", "<br>")   # "\n" só vem do usuário
             if s.italic and italic:
                 text = f"<i>{text}</i>"
             if s.bold and bold:
