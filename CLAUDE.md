@@ -86,7 +86,8 @@ inexistente ou inválido, inclusive o `output` gravado, porta ocupada) saem como
 usuário). Campos editáveis à mão: por bloco, `style.align` (justify|left|center|right),
 `style.indent_em` (1ª linha; só left/justify), `style.block_indent_em` (bloco inteiro, do lado do
 alinhamento: left/justify à esquerda, right à direita, center nenhum; em do bloco; o OCR não preenche),
-`style.font_size_pt` (escala medida), `style.page_break_before`,
+`style.font_size_pt` (escala medida), `style.line_height` (entrelinha do bloco, × a fonte do bloco; `null` =
+a do documento; não vale em tabelas), `style.page_break_before`,
 `style.space_before_lines`/`style.space_after_lines` (linhas do corpo, aceita fração; somam ao espaço
 que o bloco já tem; negativo aproxima, e pode sobrepor), `style.hidden`, `style.bold`/`style.italic`
 (sobrescrevem o bloco todo; `false` tira também a marca dos trechos; `null` = padrão do tipo); por
@@ -157,7 +158,7 @@ scripts/          serve_vllm.sh (um servidor; GPU_MEM pela VRAM livre; MAX_IMAGE
 - `Block.kind`: title | heading | paragraph | list_item | caption | table | formula | figure | endnote.
   `endnote` é um marcador de posição (`note=id`); o conteúdo fica em `doc.notes`.
   `trailing_notes`: notas de rodapé sem chamada, ancoradas no último bloco da página de origem.
-- `BlockStyle`: align, indent_em, block_indent_em, font_size_pt, full_width, rule_above/rule_below (`Rule`:
+- `BlockStyle`: align, indent_em, block_indent_em, font_size_pt, line_height, full_width, rule_above/rule_below (`Rule`:
   thickness_pt, gap_pt, left_em no em do corpo, right_frac relativo à área de texto),
   hidden (o render pula o bloco; a quebra de página dele passa para o próximo bloco visível),
   space_before_lines/space_after_lines (linhas do corpo, com fração; o "depois" soma ao "antes" do próximo

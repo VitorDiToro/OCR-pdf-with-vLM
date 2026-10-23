@@ -431,3 +431,22 @@ def test_negative_space_is_a_negative_margin() -> None:
     doc.blocks[1].style.space_after_lines = -1
     doc.blocks[2].style.space_before_lines = 0.5          # somam: -0,5 linha
     assert '<div class="space" style="margin-top:-6pt"></div>' in _body_html(doc)
+
+
+
+def test_block_line_height(tmp_path: Path) -> None:
+    def gap(line_height: float | None) -> float:
+        doc = _two_parts(1, None)
+        doc.blocks[3].spans = [Span("Linha um\nLinha dois")]
+        doc.blocks[3].style.line_height = line_height
+        out = tmp_path / f"lh{line_height}.pdf"
+        render.render_pdf(doc, out, base_dir=tmp_path)
+        y = {t.strip(): y for t, _, y in _text_positions(out) if t.strip()}
+        return y["Linha um"] - y["Linha dois"]
+
+    assert gap(None) == pytest.approx(1.2 * 10, abs=0.3)           # a do documento
+    assert gap(2.0) == pytest.approx(2.0 * 10, abs=0.3)
+    assert gap(0.9) == pytest.approx(0.9 * 10, abs=0.3)
+    doc = _two_parts(1, None)
+    doc.blocks[0].style.line_height = 0.9                           # título: vale sobre o 1.2 do h2
+    assert "line-height:0.9" in _body_html(doc).split("<h2", 1)[1].split(">", 1)[0]

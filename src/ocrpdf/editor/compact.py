@@ -10,7 +10,7 @@ from ocrpdf.htmlsafe import sanitize_table
 from ocrpdf.model import Block, BlockStyle, Span
 
 EDITABLE_STYLE = (
-    "align", "indent_em", "block_indent_em", "font_size_pt", "page_break_before",
+    "align", "indent_em", "block_indent_em", "font_size_pt", "line_height", "page_break_before",
     "space_before_lines", "space_after_lines", "hidden", "bold", "italic", "table_borders",
 )
 _MARKS = ("italic", "bold", "sup", "sub", "math")
@@ -111,6 +111,11 @@ def _style(base: BlockStyle, d: object) -> BlockStyle:
         if not _is_num(fs) or fs <= 0:
             raise ValueError("font_size_pt deve ser um número positivo")
         v["font_size_pt"] = float(fs)
+    lh = v["line_height"]
+    if lh is not None:
+        if not _is_num(lh) or not 0 < lh <= 10:
+            raise ValueError("line_height deve ser um número positivo (× a fonte do bloco; null = a do documento)")
+        v["line_height"] = float(lh)
     for f in ("space_before_lines", "space_after_lines"):
         n = v[f]
         if not _is_num(n):

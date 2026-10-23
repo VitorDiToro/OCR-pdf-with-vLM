@@ -43,6 +43,7 @@ class BlockStyle:
     indent_em: float = 0.0            # recuo da primeira linha
     block_indent_em: float = 0.0      # recuo do bloco inteiro, do lado do alinhamento (center: nenhum)
     font_size_pt: float | None = None
+    line_height: float | None = None  # entrelinha do bloco, × a fonte do bloco (None: a do documento)
     full_width: bool = True           # False: bloco pertence a uma coluna
     rule_above: Rule | None = None    # filete colado acima do bloco
     rule_below: Rule | None = None    # filete colado abaixo do bloco

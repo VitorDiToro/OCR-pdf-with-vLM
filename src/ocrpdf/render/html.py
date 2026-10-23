@@ -203,6 +203,8 @@ class _HtmlRenderer:
             css.append(f"margin-{side}:{st.block_indent_em:g}em")
         if st.font_size_pt:
             css.append(f"font-size:{st.font_size_pt:g}pt")
+        if st.line_height:
+            css.append(f"line-height:{st.line_height:g}")
         if b.kind in _TEXT_KINDS:
             if st.bold is not None:
                 css.append(f"font-weight:{'bold' if st.bold else 'normal'}")
